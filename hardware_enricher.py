@@ -16,6 +16,8 @@ from typing import Any
 
 REQUEST_TIMEOUT_SECONDS = 15
 MAX_DESCRIPTION_CHARS = 520
+# Listing text kept for analysis; the CPU is often stated after the first lines.
+MAX_ANALYSIS_TEXT_CHARS = 5000
 DEFAULT_RAM_8GB_UPGRADE_EUR = 50
 DEFAULT_RAM_32GB_KIT_EUR = 130
 PLAUSIBLE_RAM_SIZES_GB = {2, 4, 6, 8, 12, 16, 20, 24, 32, 40, 48, 64}
@@ -42,6 +44,7 @@ CPU_PERFORMANCE_POINTS: dict[str, int] = {
     "i58400": 33, "i58600": 36, "i59400": 35, "i59400t": 31, "i59600t": 36,
     "i510400t": 36, "i510600t": 40, "i76700": 27, "i77700": 30,
     "ryzen3pro3200ge": 19, "ryzen5pro3400ge": 25,
+    "ryzen3pro3200g": 21, "ryzen5pro3400g": 27, "ryzen3pro2200g": 18, "ryzen5pro2400g": 24,
     "a10pro9700e": 8, "a12pro9800e": 9,
     "i58400t": 30, "i58500": 34, "i58500t": 32, "i58600t": 34,
     "i76700t": 24, "i77700t": 27, "i78700t": 39, "i78700": 43,
@@ -121,6 +124,10 @@ CPU_CATALOG: dict[str, dict[str, Any]] = {
     "i510600t": {"name": "Intel Core i5-10600T", "cores": 6, "threads": 12, "tdp_w": 35, "gpu": "Intel UHD Graphics 630"},
     "i76700": {"name": "Intel Core i7-6700", "cores": 4, "threads": 8, "tdp_w": 65, "gpu": "Intel HD Graphics 530"},
     "i77700": {"name": "Intel Core i7-7700", "cores": 4, "threads": 8, "tdp_w": 65, "gpu": "Intel HD Graphics 630"},
+    "ryzen3pro3200g": {"name": "AMD Ryzen 3 PRO 3200G", "cores": 4, "threads": 4, "tdp_w": 65, "gpu": "Radeon Vega 8 Graphics"},
+    "ryzen5pro3400g": {"name": "AMD Ryzen 5 PRO 3400G", "cores": 4, "threads": 8, "tdp_w": 65, "gpu": "Radeon Vega 11 Graphics"},
+    "ryzen3pro2200g": {"name": "AMD Ryzen 3 PRO 2200G", "cores": 4, "threads": 4, "tdp_w": 65, "gpu": "Radeon Vega 8 Graphics"},
+    "ryzen5pro2400g": {"name": "AMD Ryzen 5 PRO 2400G", "cores": 4, "threads": 8, "tdp_w": 65, "gpu": "Radeon Vega 11 Graphics"},
     "ryzen3pro3200ge": {"name": "AMD Ryzen 3 PRO 3200GE", "cores": 4, "threads": 4, "tdp_w": 35, "gpu": "Radeon Vega 8 Graphics"},
     "ryzen5pro3400ge": {"name": "AMD Ryzen 5 PRO 3400GE", "cores": 4, "threads": 8, "tdp_w": 35, "gpu": "Radeon Vega 11 Graphics"},
     "a10pro9700e": {"name": "AMD PRO A10-9700E", "cores": 4, "threads": 4, "tdp_w": 35, "gpu": "Radeon R7 Graphics"},
@@ -525,7 +532,7 @@ def fetch_listing_description(
                 filtered.append(text)
         if not filtered:
             return ""
-        return max(filtered, key=len)[:MAX_DESCRIPTION_CHARS]
+        return max(filtered, key=len)[:MAX_ANALYSIS_TEXT_CHARS]
     except ListingRateLimited:
         raise
     except Exception as error:  # detail enrichment must never stop the base notifier
@@ -849,8 +856,12 @@ def analyze_hardware(
     cpu_key = _cpu_key_for_name(cpu_name)
     cpu_note = None
     if platform and platform["max_tdp_w"] == 35 and cpu and (cpu.get("tdp_w") or 0) > 35:
-        t_key = f"{cpu_key}t"
-        if t_key in CPU_CATALOG:
+        # Intel T and AMD GE are the low-power variants of the listed part.
+        t_key = next(
+            (f"{cpu_key}{suffix}" for suffix in ("t", "e") if f"{cpu_key}{suffix}" in CPU_CATALOG),
+            None,
+        )
+        if t_key:
             cpu_note = (
                 f"35 W chassis: listed as {cpu_name}, probably the {CPU_CATALOG[t_key]['name']}; verify"
             )

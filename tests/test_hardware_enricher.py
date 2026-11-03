@@ -287,6 +287,27 @@ class HardwareAnalysisTests(unittest.TestCase):
         lines = enricher.build_telegram_lines({"title": "x", "hardware_analysis": no_price})
         self.assertTrue(any("CPU upgrade price not configured" in line for line in lines))
 
+    def test_amd_desktop_apu_in_35w_mini_is_read_as_ge_variant(self):
+        result = enricher.analyze_hardware(
+            "HP EliteDesk 705 G5 Desktop Mini Windows 11 pro - reconditionné",
+            "Caractéristiques : * AMD Ryzen 3 PRO 3200G – 4 cœurs * 12 Go de RAM DDR4",
+        )
+        self.assertEqual(result["cpu"], "AMD Ryzen 3 PRO 3200GE")
+        self.assertIn("35 W chassis", result["cpu_note"])
+
+    def test_cpu_stated_late_in_a_long_description_is_found(self):
+        page = (
+            '<meta name="description" content="Lenovo M920q - ' + "Ottime condizioni. " * 40
+            + 'Processore Intel Core i5-8500T.">'
+        )
+        session = Mock()
+        session.get.return_value = Mock(status_code=200, text=page, raise_for_status=Mock())
+        description = enricher.fetch_listing_description("https://example.test/i", session, title="Lenovo M920q")
+        self.assertGreater(len(description), enricher.MAX_DESCRIPTION_CHARS)
+        result = enricher.analyze_hardware("Lenovo ThinkCentre M920q Tiny", description)
+        self.assertEqual(result["cpu"], "Intel Core i5-8500T")
+        self.assertLessEqual(len(result["description"]), enricher.MAX_DESCRIPTION_CHARS)
+
 
 if __name__ == "__main__":
     unittest.main()
