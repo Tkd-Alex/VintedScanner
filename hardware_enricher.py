@@ -214,11 +214,15 @@ NON_VPRO_CPU_KEYS = {
 def _platform(
     pattern: str, name: str, generation: int | None, vpro: str, max_ram_gb: int,
     pcie_slot: bool | None, max_tdp_w: int | None, typical_cpu: str,
+    cpu_generations: tuple[int, ...] | None = None,
 ) -> dict[str, Any]:
+    if cpu_generations is None:
+        cpu_generations = (generation,) if generation else ()
     return {
         "pattern": re.compile(pattern, re.I), "name": name, "generation": generation,
         "vpro": vpro, "max_ram_gb": max_ram_gb, "pcie_slot": pcie_slot,
         "max_tdp_w": max_tdp_w, "typical_cpu": typical_cpu,
+        "cpu_generations": cpu_generations,
     }
 
 
@@ -227,12 +231,13 @@ def _platform(
 # AMT needs a vPro CPU too), "no", "verify" (not confirmed here) or "amd".
 # max_ram_gb is the official maximum; max_tdp_w is the highest CPU class the
 # chassis ships with (35 = T-series only). None means "not confirmed here".
+# cpu_generations lists the Intel Core generations the model was offered with.
 PLATFORM_PROFILES: list[dict[str, Any]] = [
-    _platform(r"\bM920x\b", "Lenovo ThinkCentre M920x Tiny", 8, "yes", 32, True, 65, "i58500t"),
-    _platform(r"\bM920q?\b", "Lenovo ThinkCentre M920q Tiny", 8, "yes", 32, True, 65, "i58500t"),
-    _platform(r"\bM720q?\b", "Lenovo ThinkCentre M720q Tiny", 8, "no", 32, True, 65, "i58500t"),
-    _platform(r"\bM910[qx]?\b", "Lenovo ThinkCentre M910q Tiny", 7, "yes", 32, False, 35, "i57500t"),
-    _platform(r"\bM710q?\b", "Lenovo ThinkCentre M710q Tiny", 7, "no", 32, False, 35, "i57500t"),
+    _platform(r"\bM920x\b", "Lenovo ThinkCentre M920x Tiny", 8, "yes", 32, True, 65, "i58500t", (8, 9)),
+    _platform(r"\bM920q?\b", "Lenovo ThinkCentre M920q Tiny", 8, "yes", 32, True, 65, "i58500t", (8, 9)),
+    _platform(r"\bM720q?\b", "Lenovo ThinkCentre M720q Tiny", 8, "no", 32, True, 65, "i58500t", (8, 9)),
+    _platform(r"\bM910[qx]?\b", "Lenovo ThinkCentre M910q Tiny", 7, "yes", 32, False, 35, "i57500t", (6, 7)),
+    _platform(r"\bM710q?\b", "Lenovo ThinkCentre M710q Tiny", 7, "no", 32, False, 35, "i57500t", (6, 7)),
     _platform(r"\bM900\b", "Lenovo ThinkCentre M900 Tiny", 6, "yes", 32, False, 35, "i56500t"),
     _platform(r"\bM700\b", "Lenovo ThinkCentre M700 Tiny", 6, "no", 32, False, 35, "i56500t"),
     _platform(r"\bM90q\b", "Lenovo ThinkCentre M90q Tiny", 10, "yes", 64, None, None, "i510500t"),
@@ -241,32 +246,32 @@ PLATFORM_PROFILES: list[dict[str, Any]] = [
     _platform(r"\bM75q\b", "Lenovo ThinkCentre M75q Tiny", None, "amd", 32, False, 35, "ryzen5pro3400ge"),
     _platform(r"\bM715q\b", "Lenovo ThinkCentre M715q Tiny", None, "amd", 32, False, 35, "ryzen5pro2400ge"),
     _platform(r"\bEliteDesk\s+800\s+G2\b", "HP EliteDesk 800 G2 Mini", 6, "yes", 32, False, 65, "i56500t"),
-    _platform(r"\bEliteDesk\s+800\s+G3\b", "HP EliteDesk 800 G3 Mini", 7, "yes", 32, False, 65, "i57500t"),
+    _platform(r"\bEliteDesk\s+800\s+G3\b", "HP EliteDesk 800 G3 Mini", 7, "yes", 32, False, 65, "i57500t", (6, 7)),
     _platform(r"\bEliteDesk\s+800\s+G4\b", "HP EliteDesk 800 G4 Mini", 8, "yes", 32, False, 65, "i58500t"),
-    _platform(r"\bEliteDesk\s+800\s+G5\b", "HP EliteDesk 800 G5 Mini", 9, "yes", 64, False, 65, "i59500t"),
+    _platform(r"\bEliteDesk\s+800\s+G5\b", "HP EliteDesk 800 G5 Mini", 9, "yes", 64, False, 65, "i59500t", (8, 9)),
     _platform(r"\bEliteDesk\s+800\s+G6\b", "HP EliteDesk 800 G6 Mini", 10, "yes", 64, False, 65, "i510500t"),
     _platform(r"\bEliteDesk\s+705\s+G[45]\b", "HP EliteDesk 705 Mini", None, "amd", 32, False, 35, "ryzen5pro2400ge"),
-    _platform(r"\bProDesk\s+400\s+G3\b", "HP ProDesk 400 G3 Mini", 7, "no", 32, False, 35, "i57500t"),
+    _platform(r"\bProDesk\s+400\s+G3\b", "HP ProDesk 400 G3 Mini", 7, "no", 32, False, 35, "i57500t", (6, 7)),
     _platform(r"\bProDesk\s+400\s+G4\b", "HP ProDesk 400 G4 Mini", 8, "no", 32, False, 35, "i58500t"),
-    _platform(r"\bProDesk\s+400\s+G5\b", "HP ProDesk 400 G5 Mini", 9, "no", 32, False, 35, "i59500t"),
+    _platform(r"\bProDesk\s+400\s+G5\b", "HP ProDesk 400 G5 Mini", 9, "no", 32, False, 35, "i59500t", (8, 9)),
     _platform(r"\bProDesk\s+400\s+G6\b", "HP ProDesk 400 G6 Mini", 10, "no", 64, False, 35, "i510500t"),
     _platform(r"\bProDesk\s+600\s+G2\b", "HP ProDesk 600 G2 Mini", 6, "verify", 32, False, 65, "i56500t"),
-    _platform(r"\bProDesk\s+600\s+G3\b", "HP ProDesk 600 G3 Mini", 7, "verify", 32, False, 65, "i57500t"),
+    _platform(r"\bProDesk\s+600\s+G3\b", "HP ProDesk 600 G3 Mini", 7, "verify", 32, False, 65, "i57500t", (6, 7)),
     _platform(r"\bProDesk\s+600\s+G4\b", "HP ProDesk 600 G4 Mini", 8, "verify", 32, False, 65, "i58500t"),
-    _platform(r"\bProDesk\s+600\s+G5\b", "HP ProDesk 600 G5 Mini", 9, "verify", 64, False, 65, "i59500t"),
+    _platform(r"\bProDesk\s+600\s+G5\b", "HP ProDesk 600 G5 Mini", 9, "verify", 64, False, 65, "i59500t", (8, 9)),
     _platform(r"\bProDesk\s+600\s+G6\b", "HP ProDesk 600 G6 Mini", 10, "verify", 64, False, 65, "i510500t"),
     _platform(r"\bProDesk\s+405\s+G\d\b", "HP ProDesk 405 Mini", None, "amd", 32, False, 35, "ryzen3pro3200ge"),
     _platform(r"\bOptiPlex\s+3040\b", "Dell OptiPlex 3040 Micro", 6, "no", 16, False, 35, "i56500t"),
     _platform(r"\bOptiPlex\s+7040\b", "Dell OptiPlex 7040 Micro", 6, "yes", 32, False, 35, "i56500t"),
-    _platform(r"\bOptiPlex\s+3050\b", "Dell OptiPlex 3050 Micro", 7, "no", 32, False, 35, "i57500t"),
-    _platform(r"\bOptiPlex\s+5050\b", "Dell OptiPlex 5050 Micro", 7, "no", 32, False, 35, "i57500t"),
-    _platform(r"\bOptiPlex\s+7050\b", "Dell OptiPlex 7050 Micro", 7, "yes", 32, False, 35, "i57500t"),
+    _platform(r"\bOptiPlex\s+3050\b", "Dell OptiPlex 3050 Micro", 7, "no", 32, False, 35, "i57500t", (6, 7)),
+    _platform(r"\bOptiPlex\s+5050\b", "Dell OptiPlex 5050 Micro", 7, "no", 32, False, 35, "i57500t", (6, 7)),
+    _platform(r"\bOptiPlex\s+7050\b", "Dell OptiPlex 7050 Micro", 7, "yes", 32, False, 35, "i57500t", (6, 7)),
     _platform(r"\bOptiPlex\s+3060\b", "Dell OptiPlex 3060 Micro", 8, "no", 32, False, 35, "i58500t"),
     _platform(r"\bOptiPlex\s+5060\b", "Dell OptiPlex 5060 Micro", 8, "verify", 32, False, 35, "i58500t"),
     _platform(r"\bOptiPlex\s+7060\b", "Dell OptiPlex 7060 Micro", 8, "yes", 32, False, 35, "i58500t"),
-    _platform(r"\bOptiPlex\s+3070\b", "Dell OptiPlex 3070 Micro", 9, "no", 32, False, 35, "i59500t"),
-    _platform(r"\bOptiPlex\s+5070\b", "Dell OptiPlex 5070 Micro", 9, "verify", 64, False, 35, "i59500t"),
-    _platform(r"\bOptiPlex\s+7070\b", "Dell OptiPlex 7070 Micro", 9, "yes", 64, False, 35, "i59500t"),
+    _platform(r"\bOptiPlex\s+3070\b", "Dell OptiPlex 3070 Micro", 9, "no", 32, False, 35, "i59500t", (8, 9)),
+    _platform(r"\bOptiPlex\s+5070\b", "Dell OptiPlex 5070 Micro", 9, "verify", 64, False, 35, "i59500t", (8, 9)),
+    _platform(r"\bOptiPlex\s+7070\b", "Dell OptiPlex 7070 Micro", 9, "yes", 64, False, 35, "i59500t", (8, 9)),
     _platform(r"\bOptiPlex\s+3080\b", "Dell OptiPlex 3080 Micro", 10, "no", 64, False, 35, "i510500t"),
     _platform(r"\bOptiPlex\s+5080\b", "Dell OptiPlex 5080 Micro", 10, "verify", 64, False, 35, "i510500t"),
     _platform(r"\bOptiPlex\s+7080\b", "Dell OptiPlex 7080 Micro", 10, "yes", 64, False, 35, "i510500t"),
@@ -304,6 +309,28 @@ def _estimated_cpu_key(platform: dict[str, Any] | None, text: str) -> str | None
     if match and match.group(3):
         return "a12pro9800e"
     return platform["typical_cpu"]
+
+
+def cpu_generation(cpu_key: str | None) -> int | None:
+    """Return the Intel Core generation of a catalog key such as "i78700t"."""
+    match = re.fullmatch(r"i[3579](\d{4,5})[a-z]*", cpu_key or "")
+    return int(match.group(1)[:-3]) if match else None
+
+
+def compatible_platforms(cpu_key: str) -> list[str]:
+    """List supported chassis offered with this CPU generation and TDP class."""
+    generation = cpu_generation(cpu_key)
+    cpu = CPU_CATALOG.get(cpu_key)
+    if generation is None or not cpu:
+        return []
+    names = []
+    for profile in PLATFORM_PROFILES:
+        if generation not in profile["cpu_generations"]:
+            continue
+        if profile["max_tdp_w"] is not None and cpu["tdp_w"] > profile["max_tdp_w"]:
+            continue
+        names.append(profile["name"])
+    return names
 
 
 def _find_platform_profile(text: str) -> dict[str, Any] | None:

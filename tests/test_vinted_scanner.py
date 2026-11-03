@@ -595,3 +595,78 @@ class RamHuntTests(unittest.TestCase):
         send_notifications.assert_called_once()
         extra_lines = send_notifications.call_args.kwargs["extra_lines"]
         self.assertTrue(any("RAM HUNT" in line for line in extra_lines))
+
+
+class CpuHuntTests(unittest.TestCase):
+    targets = {key: scanner.Decimal(str(cap)) for key, cap in scanner.CPU_HUNT_DEFAULT_TARGETS.items()}
+
+    def item(self, title, price="80", description=""):
+        return {
+            "id": 77, "title": title, "url": "https://example.test/items/77",
+            "price": {"amount": price, "currency_code": "EUR"}, "description": description,
+        }
+
+    def test_loose_target_cpu_under_cap_is_a_candidate(self):
+        candidate = scanner.classify_cpu_hunt_candidate(
+            self.item("Processore Intel Core i7-8700T LGA1151", "85"), self.targets
+        )
+        self.assertEqual(candidate["cpu_key"], "i78700t")
+        self.assertEqual(candidate["generation"], 8)
+        self.assertIn("Lenovo ThinkCentre M920q Tiny", candidate["platforms"])
+        self.assertNotIn("Lenovo ThinkCentre M710q Tiny", candidate["platforms"])
+        lines = scanner.cpu_hunt_telegram_lines(candidate, "i7-8700T")
+        self.assertTrue(any(line.startswith("Build estimate: €") for line in lines))
+
+    def test_non_candidates_are_rejected(self):
+        rejected = [
+            self.item("Mini PC Lenovo ThinkCentre M920q CPU i7-8700T 16GB", "85"),
+            self.item("CPU Intel i7-8750H", "40"),
+            self.item("Processore Intel i7-8700 LGA1151", "60"),
+            self.item("CPU Intel i7-8700T ES QS", "40"),
+            self.item("Processore Intel i7-8700T", "150"),
+            self.item("Portatile i7-8700T processore", "60"),
+            self.item("Processore Intel Core i5-8400T", "30"),
+        ]
+        for item in rejected:
+            with self.subTest(title=item["title"]):
+                self.assertIsNone(scanner.classify_cpu_hunt_candidate(item, self.targets))
+
+    def test_configuration_generates_one_query_per_target_with_its_cap(self):
+        with patch.object(scanner.Config, "cpu_hunt_enabled", True), patch.object(
+            scanner.Config, "cpu_hunt_targets", {"i78700t": 90, "i76700t": 50}
+        ):
+            queries, targets = scanner.load_cpu_hunt_configuration()
+        self.assertEqual([q["search_text"] for q in queries], ["i7-8700T", "i7-6700T"])
+        self.assertEqual([q["price_to"] for q in queries], ["90", "50"])
+        self.assertEqual(targets["i76700t"], 50)
+
+    def test_unknown_target_key_is_rejected(self):
+        with patch.object(scanner.Config, "cpu_hunt_enabled", True), patch.object(
+            scanner.Config, "cpu_hunt_targets", {"i99999t": 90}
+        ):
+            with self.assertRaisesRegex(ValueError, "unknown CPU key"):
+                scanner.load_cpu_hunt_configuration()
+
+    def test_disabled_by_default_in_sample(self):
+        with patch.object(scanner.Config, "cpu_hunt_enabled", False):
+            self.assertEqual(scanner.load_cpu_hunt_configuration(), ([], {}))
+
+    @patch("vinted_scanner.send_notifications", return_value=True)
+    @patch("vinted_scanner.get_catalog_items")
+    def test_cpu_hunt_uses_its_own_ledger(self, get_catalog_items, send_notifications):
+        get_catalog_items.return_value = [
+            self.item("Processore Intel i5-9500T", "60"),
+            dict(self.item("Mini PC HP EliteDesk 800 G5", "200"), id=78),
+        ]
+        with tempfile.TemporaryDirectory() as directory, patch.object(
+            scanner.Config, "cpu_hunt_fetch_details", False
+        ):
+            ledger = Path(directory) / "cpu.txt"
+            failed = scanner.process_cpu_hunt_queries(
+                Mock(), "url", [{"search_text": "i5-9500T"}], {}, set(), False,
+                self.targets, database_path=ledger,
+            )
+            self.assertFalse(failed)
+            self.assertEqual(ledger.read_text(encoding="utf-8").split(), ["77", "78"])
+        send_notifications.assert_called_once()
+        self.assertTrue(any("CPU HUNT" in line for line in send_notifications.call_args.kwargs["extra_lines"]))

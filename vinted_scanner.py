@@ -25,6 +25,7 @@ PROJECT_DIR = Path(__file__).resolve().parent
 ITEMS_DATABASE_PATH = PROJECT_DIR / "vinted_items.txt"
 RAM_HUNT_DATABASE_PATH = PROJECT_DIR / "vinted_ram_hunt_items.txt"
 FILTERED_DATABASE_PATH = PROJECT_DIR / "vinted_filtered_items.txt"
+CPU_HUNT_DATABASE_PATH = PROJECT_DIR / "vinted_cpu_hunt_items.txt"
 LOG_PATH = PROJECT_DIR / "vinted_scanner.log"
 REQUEST_TIMEOUT_SECONDS = 30
 
@@ -161,6 +162,30 @@ def fetch_item_description(item, session=None):
         item["url"], session=session, headers=build_detail_headers(),
         title=item["title"],
     )
+
+
+# CPU Hunt: loose low-power CPUs that can upgrade a cheap i3/Pentium mini PC.
+# Keys are hardware_enricher.CPU_CATALOG keys; values are price caps in EUR.
+CPU_HUNT_DEFAULT_TARGETS = {
+    "i78700t": 90, "i79700t": 110, "i59500t": 70, "i58500t": 60,
+    "i77700t": 55, "i76700t": 50,
+}
+CPU_HUNT_DEFAULT_BASE_PRICE_EUR = 90
+LOOSE_CPU_TITLE_RE = re.compile(
+    r"\b(?:processore|processori|processor|prozessor|processeur|procesador|cpu|"
+    r"lga\s*-?\s*1151|socket|tray)\b",
+    re.IGNORECASE,
+)
+WHOLE_SYSTEM_TITLE_RE = re.compile(
+    r"\b(?:mini\s*pc|pc\s+completo|computer|desktop|notebook|laptop|portatile|"
+    r"thinkcentre|elitedesk|prodesk|optiplex|tiny|nuc)\b",
+    re.IGNORECASE,
+)
+STORAGE_WORD_RE = re.compile(r"\b(?:ssd|hdd|nvme|emmc)\b", re.IGNORECASE)
+SAMPLE_CPU_RE = re.compile(
+    r"\b(?:engineering\s+sample|qualification\s+sample|campione\s+di\s+ingegneria)\b"
+    r"|(?<![\w-])(?:ES|QS)(?![\w-])"
+)
 
 
 class CatalogError(RuntimeError):
@@ -855,45 +880,52 @@ def ram_hunt_telegram_lines(candidate, max_price_eur, matched_query=None):
     return lines
 
 
-def process_ram_hunt_item(
+def process_hunt_item(
     raw_item,
     analyzed_items,
     dry_run,
-    max_price_eur,
-    database_path=RAM_HUNT_DATABASE_PATH,
+    *,
+    label,
+    classify,
+    build_lines,
+    fetch_details,
+    database_path,
     matched_query=None,
     session=None,
 ):
-    """Independently process a RAM Hunt listing using its own dedupe database."""
+    """Process one listing of an independent hunt mode with its own ledger.
+
+    ``classify`` receives a raw catalogue item and returns a candidate or None;
+    ``build_lines`` turns a candidate into notification lines.
+    """
     normalized = normalize_item(raw_item)
     if not normalized or normalized["id"] in analyzed_items:
         return True
 
-    # The catalogue often provides only a title. Fetching a detail page is opt-in
-    # for RAM Hunt to keep the added polling load modest and predictable.
-    if (not normalized["description"]
-            and bool(getattr(Config, "ram_hunt_fetch_details", False))):
+    # The catalogue often provides only a title. Fetching a detail page is
+    # opt-in for hunt modes to keep the added polling load modest.
+    if not normalized["description"] and fetch_details:
         normalized["description"] = fetch_item_description(normalized, session)
 
-    candidate = classify_ram_hunt_candidate(raw_item, max_price_eur)
+    candidate = classify(raw_item)
     if candidate is None and normalized["description"]:
         item_for_classification = dict(raw_item)
         item_for_classification["description"] = normalized["description"]
-        candidate = classify_ram_hunt_candidate(item_for_classification, max_price_eur)
+        candidate = classify(item_for_classification)
 
     if candidate is None:
-        # Store irrelevant fuzzy-search results separately so they are not
-        # reprocessed on every cycle; this does not affect normal mini-PC alerts.
+        # Store irrelevant fuzzy-search results in the hunt ledger so they are
+        # not reprocessed on every cycle; this does not affect mini-PC alerts.
         save_analyzed_item(normalized["id"], database_path)
         analyzed_items.add(normalized["id"])
-        logging.info("RAM Hunt ignored non-candidate listing id=%s title=%r", normalized["id"], normalized["title"])
+        logging.info("%s ignored non-candidate listing id=%s title=%r", label, normalized["id"], normalized["title"])
         if dry_run:
-            print(f"RAM HUNT SKIPPED: {normalized['title']} — outside candidate rules\n")
+            print(f"{label.upper()} SKIPPED: {normalized['title']} — outside candidate rules\n")
         return True
 
-    extra_lines = ram_hunt_telegram_lines(candidate, max_price_eur, matched_query)
+    extra_lines = build_lines(candidate)
     if dry_run:
-        print(f"RAM HUNT CANDIDATE: {normalized['title']}")
+        print(f"{label.upper()} CANDIDATE: {normalized['title']}")
         print(f"Price: {normalized['price']}")
         print(f"URL: {normalized['url']}")
         for line in extra_lines:
@@ -910,6 +942,30 @@ def process_ram_hunt_item(
         save_analyzed_item(normalized["id"], database_path)
         analyzed_items.add(normalized["id"])
     return succeeded
+
+
+def process_ram_hunt_item(
+    raw_item,
+    analyzed_items,
+    dry_run,
+    max_price_eur,
+    database_path=RAM_HUNT_DATABASE_PATH,
+    matched_query=None,
+    session=None,
+):
+    """Independently process a RAM Hunt listing using its own dedupe database."""
+    return process_hunt_item(
+        raw_item, analyzed_items, dry_run,
+        label="RAM Hunt",
+        classify=lambda item: classify_ram_hunt_candidate(item, max_price_eur),
+        build_lines=lambda candidate: ram_hunt_telegram_lines(
+            candidate, max_price_eur, matched_query
+        ),
+        fetch_details=bool(getattr(Config, "ram_hunt_fetch_details", False)),
+        database_path=database_path,
+        matched_query=matched_query,
+        session=session,
+    )
 
 
 def process_ram_hunt_queries(
@@ -933,6 +989,174 @@ def process_ram_hunt_queries(
             if not process_ram_hunt_item(
                 item, analyzed_items, dry_run, max_price_eur,
                 matched_query=matched_query, session=session,
+            ):
+                processing_failed = True
+    return processing_failed
+
+
+def load_cpu_hunt_configuration():
+    """Return CPU Hunt query parameters and the {cpu_key: Decimal cap} targets."""
+    if not bool(getattr(Config, "cpu_hunt_enabled", False)):
+        return [], {}
+    configured_targets = getattr(Config, "cpu_hunt_targets", CPU_HUNT_DEFAULT_TARGETS)
+    if not isinstance(configured_targets, dict) or not configured_targets:
+        raise ValueError("cpu_hunt_targets must be a non-empty {cpu_key: max_price_eur} dictionary")
+    targets = {}
+    for key, cap in configured_targets.items():
+        key = str(key).strip().lower()
+        if key not in hardware_enricher.CPU_CATALOG:
+            raise ValueError(f"cpu_hunt_targets contains an unknown CPU key: {key}")
+        try:
+            targets[key] = Decimal(str(cap))
+        except InvalidOperation as error:
+            raise ValueError(f"cpu_hunt_targets price for {key} must be numeric") from error
+        if targets[key] <= 0:
+            raise ValueError(f"cpu_hunt_targets price for {key} must be greater than zero")
+
+    configured_queries = getattr(Config, "cpu_hunt_queries", None)
+    if configured_queries is None:
+        configured_queries = [
+            {
+                "page": "1", "per_page": "24", "order": "newest_first", "filters": {},
+                "search_text": cpu_search_text(key),
+                "price_to": format(cap, "f"),
+            }
+            for key, cap in targets.items()
+        ]
+    if not isinstance(configured_queries, list):
+        raise ValueError("cpu_hunt_queries must be a list of search dictionaries")
+    queries = []
+    for configured_query in configured_queries:
+        if not isinstance(configured_query, dict):
+            raise ValueError("each cpu_hunt_queries entry must be a dictionary")
+        query = {"page": "1", "per_page": "24", "order": "newest_first", "filters": {}}
+        query.update(configured_query)
+        queries.append(build_catalog_params(query))
+    return queries, targets
+
+
+def cpu_search_text(cpu_key):
+    """Return a search term such as "i7-8700T" for a catalog key."""
+    name = hardware_enricher.CPU_CATALOG[cpu_key]["name"]
+    return re.sub(r"^Intel Core\s+", "", name)
+
+
+def classify_cpu_hunt_candidate(item, targets):
+    """Classify a listing as a loose target CPU under its price cap.
+
+    Returns None for complete systems, laptops, other CPU models (including
+    non-T, mobile H/U parts), engineering/qualification samples and prices
+    above the target's cap.
+    """
+    if not isinstance(item, dict):
+        return None
+    price = parse_item_price_amount(item)
+    if price is None:
+        return None
+    title = str(item.get("title") or "")
+    description = str(item.get("description") or "")
+    if not LOOSE_CPU_TITLE_RE.search(title):
+        return None
+    if LAPTOP_RE.search(title) or WHOLE_SYSTEM_TITLE_RE.search(title):
+        return None
+    if RAM_16_RE.search(title) or RAM_32_RE.search(title) or RAM_8_OR_LESS_RE.search(title):
+        if STORAGE_WORD_RE.search(title):
+            return None
+    if SAMPLE_CPU_RE.search(f"{title}\n{description}"):
+        return None
+
+    cpu_name, cpu = hardware_enricher._canonical_cpu(title)
+    if not cpu:
+        cpu_name, cpu = hardware_enricher._canonical_cpu(description)
+    cpu_key = hardware_enricher._cpu_key_for_name(cpu_name)
+    if cpu_key not in targets or price > targets[cpu_key]:
+        return None
+
+    try:
+        base_price = Decimal(str(getattr(
+            Config, "cpu_hunt_base_price_eur", CPU_HUNT_DEFAULT_BASE_PRICE_EUR
+        )))
+        ram_budget = Decimal(str(getattr(
+            Config, "hardware_ram_8gb_upgrade_eur", hardware_enricher.DEFAULT_RAM_8GB_UPGRADE_EUR
+        )))
+    except InvalidOperation:
+        base_price = Decimal(CPU_HUNT_DEFAULT_BASE_PRICE_EUR)
+        ram_budget = Decimal(hardware_enricher.DEFAULT_RAM_8GB_UPGRADE_EUR)
+    return {
+        "cpu_key": cpu_key,
+        "cpu_name": cpu_name,
+        "cores": cpu["cores"],
+        "threads": cpu["threads"],
+        "tdp_w": cpu["tdp_w"],
+        "generation": hardware_enricher.cpu_generation(cpu_key),
+        "price": price,
+        "cap": targets[cpu_key],
+        "platforms": hardware_enricher.compatible_platforms(cpu_key),
+        "base_price": base_price,
+        "ram_budget": ram_budget,
+        "build_estimate": base_price + price + ram_budget,
+    }
+
+
+def cpu_hunt_telegram_lines(candidate, matched_query=None):
+    """Build actionable Telegram notes for a CPU Hunt candidate."""
+    lines = [
+        "🔧 CPU HUNT — loose CPU for a mini-PC upgrade",
+        f"CPU: {candidate['cpu_name']} ({candidate['cores']} core / "
+        f"{candidate['threads']} thread · {candidate['tdp_w']} W)",
+        f"Price: €{candidate['price']} (cap €{candidate['cap']}; shipping/fees excluded)",
+    ]
+    if candidate["platforms"]:
+        lines.append(
+            f"Offered in ({candidate['generation']}th-gen platforms): "
+            + ", ".join(candidate["platforms"])
+        )
+    if candidate["generation"] is not None and candidate["generation"] <= 7:
+        lines.append(
+            "⚠️ 6th/7th-gen part: only useful for an existing legacy unit (max 32 GB, 4 cores)"
+        )
+    lines.append(
+        f"Build estimate: €{candidate['build_estimate']} = base unit €{candidate['base_price']} "
+        f"+ this CPU €{candidate['price']} + RAM to 16 GB €{candidate['ram_budget']} "
+        "(base unit = cpu_hunt_base_price_eur, a typical i3/Pentium unit of the same generation)"
+    )
+    lines.append(
+        "Before buying: check the exact model/MTM lists this CPU (9th gen needs a recent BIOS "
+        "on 8th/9th-gen models), the 35 W cooler, fresh thermal paste, undamaged socket pins "
+        "and that it is not an ES/QS sample."
+    )
+    if matched_query:
+        lines.insert(1, f"Search: {matched_query}")
+    return lines
+
+
+def process_cpu_hunt_queries(
+    session, catalog_url, queries, api_headers, analyzed_items, dry_run, targets,
+    database_path=CPU_HUNT_DATABASE_PATH,
+):
+    """Run CPU Hunt queries with their own ledger and classification."""
+    processing_failed = False
+    fetch_details = bool(getattr(Config, "cpu_hunt_fetch_details", False))
+    for params in queries:
+        matched_query = params.get("search_text") or "CPU Hunt"
+        try:
+            items = get_catalog_items(session, catalog_url, params, api_headers)
+        except CatalogError as error:
+            logging.error("CPU Hunt query failed (%s): %s", matched_query, error)
+            processing_failed = True
+            continue
+        for item in items:
+            if not process_hunt_item(
+                item, analyzed_items, dry_run,
+                label="CPU Hunt",
+                classify=lambda raw: classify_cpu_hunt_candidate(raw, targets),
+                build_lines=lambda candidate, query=matched_query: cpu_hunt_telegram_lines(
+                    candidate, query
+                ),
+                fetch_details=fetch_details,
+                database_path=database_path,
+                matched_query=matched_query,
+                session=session,
             ):
                 processing_failed = True
     return processing_failed
@@ -1019,15 +1243,19 @@ def load_configuration(dry_run=False):
 
 
 def main(dry_run=False):
-    """Run mini-PC searches and, independently, the optional RAM Hunt search."""
+    """Run mini-PC searches and, independently, the optional RAM/CPU Hunt searches."""
     configure_logging()
     try:
         catalog_url, queries, api_headers = load_configuration(dry_run)
         ram_hunt_queries, ram_hunt_max_price = load_ram_hunt_configuration()
+        cpu_hunt_queries, cpu_hunt_targets = load_cpu_hunt_configuration()
         analyzed_items = load_analyzed_items()
         filtered_items = load_filtered_items()
         ram_hunt_items = (
             load_analyzed_items(RAM_HUNT_DATABASE_PATH) if ram_hunt_queries else set()
+        )
+        cpu_hunt_items = (
+            load_analyzed_items(CPU_HUNT_DATABASE_PATH) if cpu_hunt_queries else set()
         )
     except (AttributeError, OSError, ValueError, InvalidOperation) as error:
         message = f"Configuration or local database error: {error}"
@@ -1057,6 +1285,12 @@ def main(dry_run=False):
                 ram_hunt_items, dry_run, ram_hunt_max_price,
             )
             query_failed = query_failed or ram_hunt_failed
+        if cpu_hunt_queries:
+            cpu_hunt_failed = process_cpu_hunt_queries(
+                session, catalog_url, cpu_hunt_queries, api_headers,
+                cpu_hunt_items, dry_run, cpu_hunt_targets,
+            )
+            query_failed = query_failed or cpu_hunt_failed
     except OSError as error:
         logging.error("Unable to update the local database: %s", error)
         return 1

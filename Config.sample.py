@@ -104,3 +104,21 @@ ram_hunt_queries = [
         "order": "newest_first", "filters": {}, "price_to": "100",
     },
 ]
+
+# Independent CPU Hunt mode: looks for loose low-power CPUs that can upgrade a
+# cheap i3/Pentium mini PC. Keys are CPU identifiers from hardware_enricher.py;
+# values are the maximum listing price in EUR. Search terms are generated from
+# the keys (e.g. "i7-8700T") unless cpu_hunt_queries is set. Uses its own
+# ID database (vinted_cpu_hunt_items.txt).
+cpu_hunt_enabled = False
+cpu_hunt_targets = {
+    "i78700t": 90,
+    "i79700t": 110,
+    "i59500t": 70,
+    "i58500t": 60,
+    "i77700t": 55,
+    "i76700t": 50,
+}
+# Typical price of an i3/Pentium base unit, used for the build estimate.
+cpu_hunt_base_price_eur = 90
+cpu_hunt_fetch_details = False

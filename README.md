@@ -9,6 +9,7 @@ With this script, you no longer need to manually open the Vinted app and search 
 ## Features
 
 - **Automated Search**: The script performs searches on Vinted according to your custom queries.
+- **Optional CPU Hunt mode**: Disabled by default; finds loose low-power CPUs (e.g. i7-8700T, i5-9500T) under a per-model price cap and lists the mini PCs they fit, with its own deduplication database.
 - **Separate RAM Hunt mode**: Enabled by default; finds under-€100 damaged laptops and listings mentioning 16/32 GB DDR4, for possible memory recovery. It has its own deduplication database and does not replace or filter the normal mini-PC notifications.
 - **Automatic Notifications**: Receive notifications through:
   - **Email**
@@ -350,7 +351,38 @@ When updating an existing installation, merge the RAM Hunt settings from
 If those settings are absent, the code uses the built-in defaults; set
 `ram_hunt_enabled = False` explicitly to turn the feature off.
 
+## CPU Hunt mode
 
+CPU Hunt is an optional, independent search for loose low-power CPUs that can turn a
+cheap i3/Pentium mini PC into a useful node. It is disabled in the sample
+configuration; enable it with `cpu_hunt_enabled = True`.
+
+```python
+cpu_hunt_enabled = True
+cpu_hunt_targets = {
+    "i78700t": 90, "i79700t": 110, "i59500t": 70,
+    "i58500t": 60, "i77700t": 55, "i76700t": 50,
+}
+cpu_hunt_base_price_eur = 90
+cpu_hunt_fetch_details = False
+```
+
+Each key is a CPU identifier from `CPU_CATALOG` in `hardware_enricher.py` and each
+value is the maximum listing price in EUR. One search per target is generated (for
+example `i7-8700T` with `price_to` set to its cap) unless `cpu_hunt_queries` is
+provided. A listing is notified only when its title describes a loose CPU
+(processore, CPU, LGA1151, socket, tray...), the exact target model is parsed (so
+non-T, mobile H/U and other models are ignored), it is not a complete system or a
+laptop, it is not an engineering/qualification sample, and the price is within the
+cap.
+
+The alert lists the supported chassis offered with that CPU generation and power
+class, and a build estimate: `cpu_hunt_base_price_eur` (a typical i3/Pentium unit
+of the same generation) + the CPU + the RAM-to-16 GB budget. 6th/7th-gen parts carry
+a legacy warning: they only make sense for a unit you already own or can buy very
+cheaply. Before buying, check that the exact model/MTM lists the CPU (9th-gen parts
+need a recent BIOS on 8th/9th-gen models), the 35 W cooler and the socket. CPU Hunt
+uses its own `vinted_cpu_hunt_items.txt` database.
 
 ### Upgrade references
 
