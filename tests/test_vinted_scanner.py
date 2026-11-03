@@ -98,10 +98,35 @@ class DatabaseTests(unittest.TestCase):
 
 
 class NotificationTests(unittest.TestCase):
+    @patch("vinted_scanner.time.sleep")
+    @patch("vinted_scanner.requests.post")
+    def test_telegram_rate_limit_is_retried_once_after_retry_after(self, post, sleep):
+        limited = Mock(status_code=429)
+        limited.json.return_value = {"ok": False, "parameters": {"retry_after": 7}}
+        ok = Mock(status_code=200)
+        ok.raise_for_status.return_value = None
+        post.side_effect = [limited, ok]
+        with self.assertLogs(level="WARNING"):
+            self.assertTrue(scanner.send_telegram_message("Title", "10 EUR", "url", None))
+        self.assertEqual(post.call_count, 2)
+        sleep.assert_called_once_with(7.0)
+
+    @patch("vinted_scanner.time.sleep")
+    @patch("vinted_scanner.send_telegram_message", return_value=True)
+    def test_telegram_messages_are_spaced(self, send_telegram, sleep):
+        with patch.object(scanner.Config, "notification_channels", ["telegram"]), patch.object(
+            scanner.Config, "telegram_bot_token", "token"
+        ), patch.object(scanner.Config, "telegram_chat_id", "123"), patch.object(
+            scanner.Config, "telegram_send_delay_seconds", 1.5
+        ):
+            scanner.send_notifications("Title", "10 EUR", "url", None)
+        sleep.assert_called_once_with(1.5)
+
+    @patch("vinted_scanner.time.sleep")
     @patch("vinted_scanner.send_telegram_message", return_value=True)
     @patch("vinted_scanner.send_email", return_value=True)
     @patch("vinted_scanner.send_slack_message", return_value=True)
-    def test_configured_channels_can_force_telegram_only(self, send_slack, send_email, send_telegram):
+    def test_configured_channels_can_force_telegram_only(self, send_slack, send_email, send_telegram, sleep):
         with patch.object(scanner.Config, "notification_channels", ["telegram"]), patch.object(
             scanner.Config, "smtp_username", "user@example.test"
         ), patch.object(scanner.Config, "smtp_server", "smtp.example.test"), patch.object(

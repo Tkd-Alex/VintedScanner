@@ -14,6 +14,9 @@ slack_webhook_url = ""
 # Telegram Token and ChatID for notification
 telegram_bot_token = ""
 telegram_chat_id = ""
+# Pause (seconds) after each Telegram message; a 429 rate-limit answer is
+# retried once after Telegram's retry_after hint (capped at 30 s).
+telegram_send_delay_seconds = 1.0
 
 # Vinted URL: change the TLD according to your country (.fr, .es, etc.)
 vinted_url = "https://www.vinted.it"

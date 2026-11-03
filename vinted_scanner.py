@@ -128,6 +128,9 @@ DDR3_RE = re.compile(r"\bddr\s*3\b", re.IGNORECASE)
 
 
 DEFAULT_DETAIL_FETCH_DELAY_SECONDS = 1.0
+DEFAULT_TELEGRAM_SEND_DELAY_SECONDS = 1.0
+TELEGRAM_DEFAULT_RETRY_SECONDS = 5.0
+TELEGRAM_MAX_RETRY_SECONDS = 30.0
 
 
 def build_detail_headers():
@@ -465,12 +468,43 @@ def send_telegram_message(
             params=params,
             timeout=REQUEST_TIMEOUT_SECONDS,
         )
+        if response.status_code == 429:
+            # Telegram rate limit: wait the advertised time once, then retry.
+            retry_after = telegram_retry_after(response)
+            logging.warning("Telegram rate limit hit; retrying in %s s", retry_after)
+            time.sleep(retry_after)
+            response = requests.post(
+                url,
+                params=params,
+                timeout=REQUEST_TIMEOUT_SECONDS,
+            )
         response.raise_for_status()
         logging.info("Telegram notification sent")
         return True
     except requests.exceptions.RequestException as error:
         logging.error("Error sending Telegram notification: %s", error)
         return False
+
+
+def telegram_retry_after(response):
+    """Return Telegram's retry_after hint in seconds, capped to keep runs bounded."""
+    try:
+        retry_after = float(response.json()["parameters"]["retry_after"])
+    except (ValueError, KeyError, TypeError):
+        retry_after = TELEGRAM_DEFAULT_RETRY_SECONDS
+    return max(1.0, min(retry_after, TELEGRAM_MAX_RETRY_SECONDS))
+
+
+def wait_after_telegram_message():
+    """Space consecutive Telegram messages to stay under the chat rate limit."""
+    try:
+        delay = float(getattr(
+            Config, "telegram_send_delay_seconds", DEFAULT_TELEGRAM_SEND_DELAY_SECONDS
+        ))
+    except (TypeError, ValueError):
+        delay = DEFAULT_TELEGRAM_SEND_DELAY_SECONDS
+    if delay > 0:
+        time.sleep(delay)
 
 
 def send_notifications(
@@ -500,6 +534,7 @@ def send_notifications(
                 extra_lines=extra_lines,
             )
         )
+        wait_after_telegram_message()
 
     if not results:
         logging.warning("No selected notification channel is configured; item was not saved")

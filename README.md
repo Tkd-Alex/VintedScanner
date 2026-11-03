@@ -265,7 +265,11 @@ The RAM figures are editable assumptions, not live market prices. The €50 allo
 
 The M700 Tiny platform reference lists Celeron/Pentium and 6th-gen Core CPUs through i7-6700T (4 cores / 8 threads, 32 GB maximum DDR4, two SO-DIMM slots). The M710 Tiny reference lists 6th/7th-gen Core CPUs through i7-7700T (4/8). The M720 Tiny reference lists 8th/9th-gen options including i7-8700T (6/12); the M920q PSREF has an i7-8700T configuration. These references support upgrade candidates, not blanket compatibility for every unit; BIOS and exact machine type still matter.
 
+Telegram limits how fast a bot can post to one chat. The scanner waits `telegram_send_delay_seconds` (default 1 s) after each Telegram message and, if Telegram still answers with HTTP 429, waits the advertised `retry_after` (capped at 30 s) and retries once.
+
 ### Automation with Cron
+
+Before scheduling the scanner, run `python3 vinted_scanner.py --dry-run` once. It records the listings currently online in `vinted_items.txt`, so the first scheduled run only notifies new listings instead of sending dozens of messages at once.
 
 To run the script periodically, you can set up a cron job. For example, to run the script every hour:
 
