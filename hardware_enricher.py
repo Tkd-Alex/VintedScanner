@@ -187,7 +187,7 @@ class _ListingHTMLParser(HTMLParser):
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         attr = {key.lower(): value or "" for key, value in attrs}
         if tag.lower() == "meta":
-            key = (attr.get("property") or attr.get("name") or attr.get("itemprop")).lower()
+            key = (attr.get("property") or attr.get("name") or attr.get("itemprop") or "").lower()
             value = attr.get("content", "").strip()
             if key and value:
                 self.meta[key] = value
@@ -224,20 +224,39 @@ def _walk_json_for_description(value: Any) -> list[str]:
     return descriptions
 
 
-def fetch_listing_description(item_url: str, session: Any = None) -> str:
+def _strip_title_prefix(text: str, title: str) -> str:
+    """Remove the "<listing title> - " prefix Vinted adds to meta descriptions."""
+    title = re.sub(r"\s+", " ", title or "").strip()
+    if title and text.startswith(title):
+        remainder = text[len(title):].lstrip()
+        if remainder.startswith(("-", "–", "—")):
+            return remainder[1:].strip()
+    return text
+
+
+def fetch_listing_description(
+    item_url: str,
+    session: Any = None,
+    headers: dict[str, str] | None = None,
+    title: str = "",
+) -> str:
     """Try to obtain listing text from the item's page; failure is non-fatal.
 
-    Uses one bounded, normal page request for a newly detected listing. It does
-    not use proxies, rotate identities, or try to evade access controls.
+    Uses one bounded, normal page request for a newly detected listing, with the
+    same browser-like headers the scanner already uses to open the marketplace.
+    It does not use proxies, rotate identities, or try to evade access controls.
     """
     if not item_url:
         return ""
+    request_options: dict[str, Any] = {"timeout": REQUEST_TIMEOUT_SECONDS}
+    if headers:
+        request_options["headers"] = headers
     try:
         if session is None:
             import requests
-            response = requests.get(item_url, timeout=REQUEST_TIMEOUT_SECONDS)
+            response = requests.get(item_url, **request_options)
         else:
-            response = session.get(item_url, timeout=REQUEST_TIMEOUT_SECONDS)
+            response = session.get(item_url, **request_options)
         response.raise_for_status()
         parser = _ListingHTMLParser()
         parser.feed(response.text[:2_000_000])
@@ -257,6 +276,7 @@ def fetch_listing_description(item_url: str, session: Any = None) -> str:
         filtered = []
         for candidate in candidates:
             text = re.sub(r"\s+", " ", html.unescape(candidate)).strip()
+            text = _strip_title_prefix(text, title)
             low = text.lower()
             if not text or low in {"vinted", ""}:
                 continue
@@ -759,11 +779,19 @@ def _ai_note(gpu: str | None, discrete_gpu: bool, cpu_name: str | None) -> str:
     return "Dati insufficienti per stimare l'accelerazione AI; GPU e VRAM non confermate."
 
 
-def enrich_item(item: dict[str, Any], session: Any = None, fetch_details: bool = True) -> dict[str, Any]:
+def enrich_item(
+    item: dict[str, Any],
+    session: Any = None,
+    fetch_details: bool = True,
+    headers: dict[str, str] | None = None,
+) -> dict[str, Any]:
     """Attach hardware_analysis to a normalized scanner item, non-fatally."""
     description = str(item.get("description") or "").strip()
     if fetch_details and not description:
-        description = fetch_listing_description(str(item.get("url") or ""), session=session)
+        description = fetch_listing_description(
+            str(item.get("url") or ""), session=session, headers=headers,
+            title=str(item.get("title") or ""),
+        )
     try:
         import Config
         ram_8gb_upgrade_eur = float(getattr(Config, "hardware_ram_8gb_upgrade_eur", DEFAULT_RAM_8GB_UPGRADE_EUR))

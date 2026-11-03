@@ -25,6 +25,8 @@ vinted_locale = "it-IT"
 # The scanner tries one ordinary listing-page request for each newly detected item
 # if the catalogue result does not already include a description. Set False to skip it.
 hardware_fetch_details = True
+# Pause (seconds) before each listing-page request.
+hardware_detail_fetch_delay_seconds = 1.0
 
 # Notify listings from the supported HP Mini / Lenovo Tiny / Dell Micro chassis families.
 hardware_require_target_models = True

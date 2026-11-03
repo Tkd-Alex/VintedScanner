@@ -152,6 +152,23 @@ class HardwareAnalysisTests(unittest.TestCase):
         session.get.side_effect = RuntimeError("blocked")
         self.assertEqual(enricher.fetch_listing_description("https://example.test/item", session), "")
 
+    def test_listing_page_with_meta_charset_yields_seller_description(self):
+        page = (
+            '<html><head><meta charset="utf-8">'
+            '<meta name="viewport" content="width=device-width">'
+            '<meta name="description" content="Lenovo M920q - Processore Intel Core '
+            'i5-9500T, 16 GB RAM, SSD NVMe 256 GB, perfettamente funzionante.">'
+            "</head><body></body></html>"
+        )
+        session = Mock()
+        session.get.return_value = Mock(text=page, raise_for_status=Mock())
+        headers = {"User-Agent": "test-agent"}
+        description = enricher.fetch_listing_description(
+            "https://example.test/item", session, headers=headers, title="Lenovo M920q"
+        )
+        self.assertTrue(description.startswith("Processore Intel Core i5-9500T"))
+        self.assertEqual(session.get.call_args.kwargs["headers"], headers)
+
 
 if __name__ == "__main__":
     unittest.main()

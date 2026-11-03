@@ -374,6 +374,30 @@ class ItemProcessingTests(unittest.TestCase):
             extra_lines = send_notifications.call_args.kwargs["extra_lines"]
             self.assertTrue(any("i7-6700T" in line for line in extra_lines))
 
+    @patch("vinted_scanner.time.sleep")
+    @patch("vinted_scanner.send_notifications", return_value=True)
+    @patch.object(scanner.Config, "hardware_fetch_details", True)
+    def test_detail_fetch_uses_browser_headers_and_delay(self, send_notifications, sleep):
+        item = dict(self.item)
+        item["id"] = 989
+        item["description"] = ""
+        session = Mock()
+        session.get.return_value = Mock(
+            text='<meta charset="utf-8"><meta name="description" content="Seller text with i5-8600T and 16GB RAM">',
+            raise_for_status=Mock(),
+        )
+        with tempfile.TemporaryDirectory() as directory, patch.object(
+            scanner.Config, "hardware_detail_fetch_delay_seconds", 0.5
+        ):
+            database_path = Path(directory) / "items.txt"
+            scanner.process_item(
+                item, set(), dry_run=False, database_path=database_path, session=session
+            )
+        headers = session.get.call_args.kwargs["headers"]
+        self.assertIn("User-Agent", headers)
+        self.assertTrue(headers["Referer"].startswith("https://"))
+        sleep.assert_called_once_with(0.5)
+
 
 class MainTests(unittest.TestCase):
     @patch("vinted_scanner.process_queries", return_value=True)

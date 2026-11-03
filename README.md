@@ -249,6 +249,7 @@ Default sample configuration:
 ```python
 notification_channels = ["telegram"]
 hardware_fetch_details = True
+hardware_detail_fetch_delay_seconds = 1.0
 hardware_require_target_models = True
 hardware_ram_8gb_upgrade_eur = 50
 hardware_ram_32gb_kit_eur = 130
@@ -256,7 +257,7 @@ hardware_add_discovery_queries = True
 hardware_cpu_upgrade_costs_eur = {"i76700t": 68}
 ```
 
-The RAM figures are editable assumptions, not live market prices. The €50 allowance assumes adding a compatible 8 GB module to an existing 8 GB setup; on a 4 GB base it is only a rough planning budget because the module layout may require replacement or a kit. The €130 figure assumes a 2×16 GB DDR4 kit. CPU upgrade candidates are shown only for model families present in the local reference matrix; the exact MTM, BIOS, power adapter and cooling must still be checked. CPU costs are editable in `hardware_cpu_upgrade_costs_eur`; the sample includes €68 for an i7-6700T based on one observed Vinted offer and is not a market average. Combined build estimates include listing price plus configured component budgets, **not Vinted buyer-protection fees or shipping unless already included in the chosen budget**. Missing or unclear RAM/CPU configuration stays marked for verification. The extra detail request is attempted only for newly detected items and is non-fatal if Vinted does not return the page content. To skip it, set `hardware_fetch_details = False`.
+The RAM figures are editable assumptions, not live market prices. The €50 allowance assumes adding a compatible 8 GB module to an existing 8 GB setup; on a 4 GB base it is only a rough planning budget because the module layout may require replacement or a kit. The €130 figure assumes a 2×16 GB DDR4 kit. CPU upgrade candidates are shown only for model families present in the local reference matrix; the exact MTM, BIOS, power adapter and cooling must still be checked. CPU costs are editable in `hardware_cpu_upgrade_costs_eur`; the sample includes €68 for an i7-6700T based on one observed Vinted offer and is not a market average. Combined build estimates include listing price plus configured component budgets, **not Vinted buyer-protection fees or shipping unless already included in the chosen budget**. Missing or unclear RAM/CPU configuration stays marked for verification. The extra detail request is attempted only for newly detected items, uses the same browser-like headers as the initial marketplace request, waits `hardware_detail_fetch_delay_seconds` (default 1 s) before each page, and is non-fatal if Vinted does not return the page content. To skip it, set `hardware_fetch_details = False`.
 
 The M700 Tiny platform reference lists Celeron/Pentium and 6th-gen Core CPUs through i7-6700T (4 cores / 8 threads, 32 GB maximum DDR4, two SO-DIMM slots). The M710 Tiny reference lists 6th/7th-gen Core CPUs through i7-7700T (4/8). The M720 Tiny reference lists 8th/9th-gen options including i7-8700T (6/12); the M920q PSREF has an i7-8700T configuration. These references support upgrade candidates, not blanket compatibility for every unit; BIOS and exact machine type still matter.
 

@@ -8,6 +8,7 @@ import logging
 import re
 import smtplib
 import sys
+import time
 from decimal import Decimal, InvalidOperation
 from email.message import EmailMessage
 from logging.handlers import RotatingFileHandler
@@ -114,6 +115,39 @@ RAM_8_OR_LESS_RE = re.compile(r"\b(?:4|8)\s*(?:gb|go|giga(?:byte)?)\b", re.IGNOR
 RAM_2X16_RE = re.compile(r"\b2\s*[x×]\s*16(?:\s*(?:gb|go))?\b", re.IGNORECASE)
 DDR4_RE = re.compile(r"\bddr\s*4\b", re.IGNORECASE)
 DDR3_RE = re.compile(r"\bddr\s*3\b", re.IGNORECASE)
+
+
+DEFAULT_DETAIL_FETCH_DELAY_SECONDS = 1.0
+
+
+def build_detail_headers():
+    """Return browser-like headers for listing pages, as used for the home page."""
+    headers = dict(WEB_HEADERS)
+    headers["Sec-Fetch-Site"] = "same-origin"
+    headers["Referer"] = f"{Config.vinted_url.rstrip('/')}/"
+    return headers
+
+
+def wait_before_detail_fetch():
+    """Pause between listing-page requests to keep the polling load modest."""
+    try:
+        delay = float(getattr(
+            Config, "hardware_detail_fetch_delay_seconds",
+            DEFAULT_DETAIL_FETCH_DELAY_SECONDS,
+        ))
+    except (TypeError, ValueError):
+        delay = DEFAULT_DETAIL_FETCH_DELAY_SECONDS
+    if delay > 0:
+        time.sleep(delay)
+
+
+def fetch_item_description(item, session=None):
+    """Fetch one listing description politely; failures return an empty string."""
+    wait_before_detail_fetch()
+    return hardware_enricher.fetch_listing_description(
+        item["url"], session=session, headers=build_detail_headers(),
+        title=item["title"],
+    )
 
 
 class CatalogError(RuntimeError):
@@ -538,8 +572,10 @@ def process_item(
         return True
 
     fetch_details = bool(getattr(Config, "hardware_fetch_details", True))
+    if fetch_details and not normalized_item["description"]:
+        normalized_item["description"] = fetch_item_description(normalized_item, session)
     normalized_item = hardware_enricher.enrich_item(
-        normalized_item, session=session, fetch_details=fetch_details
+        normalized_item, session=session, fetch_details=False
     )
     analysis = normalized_item.get("hardware_analysis") or {}
     require_target = bool(getattr(Config, "hardware_require_target_models", True))
@@ -749,9 +785,7 @@ def process_ram_hunt_item(
     # for RAM Hunt to keep the added polling load modest and predictable.
     if (not normalized["description"]
             and bool(getattr(Config, "ram_hunt_fetch_details", False))):
-        normalized["description"] = hardware_enricher.fetch_listing_description(
-            normalized["url"], session=session
-        )
+        normalized["description"] = fetch_item_description(normalized, session)
 
     candidate = classify_ram_hunt_candidate(raw_item, max_price_eur)
     if candidate is None and normalized["description"]:
