@@ -428,9 +428,9 @@ RAM Hunt has its own query list and ledger. It enforces a local price ceiling as
 
 These are important for the next agent. Do not silently claim that they have been solved.
 
-1. **No live Vinted validation in the recorded test runs.** The API is undocumented and can change. The suite mocks requests.
+1. **Live validation is a snapshot, not a guarantee.** Phase 6 ran two consecutive live `--dry-run` scans against vinted.it (see section 12); the API is still undocumented and can change, and the unit tests still mock requests.
 2. **One page per query.** The current sample uses 24 results per query. There is no automatic pagination/backfill. A high listing volume or long interval between scans can cause missed listings.
-3. **No retry/backoff strategy comparable to a durable production client.** The initial review recommended conservative handling for 429/403 and transient failures; this remains a candidate improvement unless separately verified.
+3. **Retry/backoff is limited.** Phase 6 added a 2 s pause and a single Retry-After retry for listing pages, a pause for the rest of the run after a second 429, and a single retry for Telegram 429. Catalogue API requests still have no retry or backoff.
 4. **No concurrency lock / overlap prevention.** The append-only text ledgers assume one scanner process at a time. Do not schedule overlapping runs.
 5. **No heartbeat or external health alert.** A cron job can stop running without an independent notification.
 6. **Plain-text deduplication files, not SQLite.** There is no built-in history table with query-level state, timestamps, delivery attempts or error status.
@@ -441,8 +441,8 @@ These are important for the next agent. Do not silently claim that they have bee
 11. **RAM cost model is coarse.** The €50 8→16 GB allowance is not a reliable estimate for every 4 GB machine or unusual module layout. No inspection of slots or RAM topology is possible from text alone.
 12. **Build totals may omit real checkout costs.** Vinted buyer-protection fees and shipping are generally not included unless manually included in a cost budget.
 13. **Only one CPU cost is configured by default.** Upgrade scores for other platforms may be pending until the user enters actual observed costs.
-14. **i3 CPU coverage is incomplete.** Add exact i3 SKUs deliberately if they are important to search interpretation.
-15. **Main filtered listings are re-evaluated every scan.** This is intentional in the latest version so broadened rules can reconsider old listings, but it can add repeated processing/log noise.
+14. **CPU coverage is curated, not exhaustive.** Phase 6 added 6th-10th gen i3 T SKUs and other common parts; 11th-gen T parts other than i5-11500T (e.g. i5-11400T) and AMD Athlon parts are still missing.
+15. **Filtered listings are re-evaluated only after a rule change.** Since phase 6 they are stored in `vinted_filtered_items.txt` tagged with `FILTER_RULES_VERSION`; bump that constant whenever target or exclusion rules change, otherwise old rejections stay in force.
 16. **RAM Hunt is enabled by default in the sample.** Check the actual live setting before assuming it is wanted on every scan; seven extra Vinted queries can add request volume.
 17. **The score must never become a notification threshold.** This is an explicit product requirement. Only the separate chassis rule and normal deduplication determine eligibility.
 
@@ -489,7 +489,7 @@ python -m py_compile vinted_scanner.py hardware_enricher.py vinted_query_builder
 
 Results:
 
-- **61 unit tests passed.**
+- **61 unit tests passed** (phase 5; see section 12 for the phase-6 status).
 - Python compilation passed for the scanner, hardware enricher and query builder.
 - The tests cover query building, request and response failures, Telegram channel selection and escaping, deduplication, dry-run behavior, target filtering, M700 USFF recognition, CPU upgrade candidates, RAM cost assumptions and RAM Hunt classification.
 - Tests mock network behavior. **No live Vinted scan was made**, so endpoint compatibility and real search coverage remain unverified.
@@ -541,5 +541,33 @@ Treat the current `main` branch as the source of truth unless the user supplies 
 | 1 | `8fb151a` | Hardware enrichment integrated into Telegram alerts. |
 | 2 + 3 | `42667da` | CPU-first scoring, target chassis filter, RAM upgrade estimates and RAM Hunt mode. |
 | 5 | `bfbddc7` | Upgrade-aware platform analysis, discovery queries and non-persistent main-filter skips. |
+| 6 | `5d02b29` | Listing descriptions are actually extracted (parser crash and 403 fixed). |
+| 6 | `eb36447` | Title-only rejection before detail fetches; versioned filtered-items ledger. |
+| 6 | `411c858` | Spare parts, accessories and multi-unit lots excluded. |
+| 6 | `4aea11c` | Discovery queries limited to the computer catalogue and a price range. |
+| 6 | `adda9fb` | CPU catalogue extended; I-5/bare-T/AMD A-series parsing; French Go/To units. |
+| 6 | `b860215` | All analysis and RAM Hunt messages in English. |
+| 6 | `7b62c05` | Platform profiles (generation, max RAM, PCIe, vPro) and the CPU 40 / price 25 / RAM 10 / storage 10 / platform 15 score. |
+| 6 | `b1cb0dc` | Upgrade-opportunity message names the actual missing input. |
+| 6 | `b520f6a` | Telegram pacing and 429 retry. |
+| 6 | `792140a` | Optional CPU Hunt mode. |
+| 6 | `60218c7` | Listing-page backoff on Vinted 429. |
+| 6 | `9c476aa` | CPU Hunt accepts short bare CPU titles. |
+| 6 | `764b6f0` | RAM Hunt reads RAM with the hardware parser and ignores non-computer "portatile" listings. |
 
 **Current source of truth for implementation:** the code on `main`, not the prose in any older README or historical assistant messages. If a historical statement and the current code disagree, inspect the code and update this handoff before making changes.
+
+---
+
+## 12. Phase 6 — Proxmox evaluation fixes (3 November 2026)
+
+A live dry run of the phase-5 code with three brand-filtered queries exposed these problems: no listing description was ever read (the HTML parser crashed on `<meta charset>` and pages were requested without browser headers, so Vinted answered 403); every run re-fetched about a hundred filtered listings; 37 of 53 alerts had an unidentified CPU; unknown CPUs scored 0/50, below a Celeron; discovery queries returned brackets and spare-part lots; and the score ignored generation, vPro/AMT and PCIe, which matter for a remote second node.
+
+Decisions taken with the user:
+
+- vPro/AMT is a score bonus, not a filter.
+- 6th/7th-gen platforms are still notified, with fewer platform points, a legacy warning, and never the "Strong candidate" label.
+- RAM Hunt stays enabled; there is still no minimum-score threshold.
+- A CPU Hunt mode was added for loose 8th/9th-gen T CPUs (and 6th/7th-gen ones with lower caps), because an i3/Pentium base plus a cheap i7-8700T or i5-9500T can beat a configured unit.
+
+Verification on 3 November 2026: 89 unit tests passed, and two consecutive live `--dry-run` scans ran with twelve brand-filtered queries, RAM Hunt and CPU Hunt enabled. The first scan took about 4.5 minutes: 86 alerts, all with a seller description, 45 filtered listings, no HTTP 429 at a 2 s page pause, 28 alerts whose sellers stated only "i5"/"i7" (scored with a tier estimate), 4 RAM Hunt and 6 CPU Hunt candidates. The second scan took 4 seconds and made no listing-page requests. These are snapshots of live data, not guarantees.
