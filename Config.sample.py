@@ -33,6 +33,10 @@ hardware_require_target_models = True
 # Add broad model searches (M700/M710/M720/M920, EliteDesk/ProDesk Mini, OptiPlex Micro)
 # to any custom searches below. Set False to use only your own queries.
 hardware_add_discovery_queries = True
+# Price range (EUR) applied to those discovery searches; they are also limited
+# to the desktop-computer catalogue to keep accessories and spare parts out.
+hardware_discovery_price_from = 60
+hardware_discovery_price_to = 400
 
 # RAM upgrade planning assumptions (EUR; update when you find better prices).
 # €50: planning allowance for an 8 -> 16 GB upgrade; for a 4 GB base this is

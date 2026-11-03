@@ -242,7 +242,7 @@ This tailored version adds a local hardware analysis to each relevant Telegram a
 
 By default, strict filtering accepts **HP EliteDesk/ProDesk Mini, Lenovo ThinkCentre Tiny, and Dell OptiPlex Micro** listings. Generic mini PCs, Geekom models, ordinary SFF desktops, and barebones are skipped. Spare parts, accessories and multi-unit lots are skipped from the title (e.g. `ricambi`, `pièces détachées`, `Lot de 5`); component words such as `antenna`, `ventola` or `staffa` exclude a title only when it names no CPU and no RAM size. One model-specific exception is Lenovo ThinkCentre M700: Lenovo's PSREF identifies it as a 1L Tiny chassis, so listings that call it `M700 USFF` are accepted when the M700 model and USFF/Tiny wording are both present. Filtered results are not written to the notified-items database. They are recorded in `vinted_filtered_items.txt` together with the filter-rule version, so they are not re-fetched on every run but are reconsidered automatically after a rule change. When a listing title does not even name a supported family (ThinkCentre, EliteDesk, ProDesk, OptiPlex), it is rejected from the title alone, without requesting its page.
 
-The scanner also adds broad model discovery searches by default (M700/M710/M720/M920, ThinkCentre Tiny, EliteDesk/ProDesk Mini and OptiPlex Micro). They are additive to the user's custom searches and can be disabled with `hardware_add_discovery_queries = False`. **Every new listing that passes the chassis filter is notified regardless of its score**; the score is informational only.
+The scanner also adds broad model discovery searches by default (ThinkCentre M700/M710/M720/M920/M70q/M90q and Tiny, EliteDesk Mini and 800 G4, ProDesk Mini, OptiPlex Micro and 7060). They are limited to the desktop-computer catalogue and to the `hardware_discovery_price_from`/`hardware_discovery_price_to` range (default €60–400). They are additive to the user's custom searches and can be disabled with `hardware_add_discovery_queries = False`. **Every new listing that passes the chassis filter is notified regardless of its score**; the score is informational only.
 
 Default sample configuration:
 
@@ -254,6 +254,8 @@ hardware_require_target_models = True
 hardware_ram_8gb_upgrade_eur = 50
 hardware_ram_32gb_kit_eur = 130
 hardware_add_discovery_queries = True
+hardware_discovery_price_from = 60
+hardware_discovery_price_to = 400
 hardware_cpu_upgrade_costs_eur = {"i76700t": 68}
 ```
 

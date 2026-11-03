@@ -79,11 +79,20 @@ CATALOG_ORDER_VALUES = {
 
 # RAM Hunt intentionally runs independently of the mini-PC search and its strict
 # chassis filter. The search terms are configurable in Config.py.
+# Vinted catalogue ID used by the sample queries for desktop computers.
+DISCOVERY_CATALOG_ID = "3564"
+DEFAULT_DISCOVERY_PRICE_FROM_EUR = 60
+DEFAULT_DISCOVERY_PRICE_TO_EUR = 400
 DEFAULT_HARDWARE_DISCOVERY_QUERIES = [
-    {"page": "1", "per_page": "24", "search_text": term, "order": "newest_first", "filters": {}}
+    {
+        "page": "1", "per_page": "24", "search_text": term, "order": "newest_first",
+        "filters": {"catalog": [DISCOVERY_CATALOG_ID]},
+    }
     for term in (
         "ThinkCentre M700", "ThinkCentre M710", "ThinkCentre M720", "ThinkCentre M920",
-        "ThinkCentre Tiny", "EliteDesk Mini", "ProDesk Mini", "OptiPlex Micro",
+        "ThinkCentre M70q", "ThinkCentre M90q", "ThinkCentre Tiny",
+        "EliteDesk Mini", "EliteDesk 800 G4", "ProDesk Mini",
+        "OptiPlex Micro", "OptiPlex 7060",
     )
 ]
 
@@ -950,11 +959,23 @@ def load_configuration(dry_run=False):
             (str(query.get("search_text", "")).casefold(), str(query.get("order", "newest_first")))
             for query in raw_queries if isinstance(query, dict)
         }
-        for query in DEFAULT_HARDWARE_DISCOVERY_QUERIES:
-            key = (query["search_text"].casefold(), query["order"])
-            if key not in known:
-                raw_queries.append(query)
-                known.add(key)
+        price_from = getattr(
+            Config, "hardware_discovery_price_from", DEFAULT_DISCOVERY_PRICE_FROM_EUR
+        )
+        price_to = getattr(
+            Config, "hardware_discovery_price_to", DEFAULT_DISCOVERY_PRICE_TO_EUR
+        )
+        for template in DEFAULT_HARDWARE_DISCOVERY_QUERIES:
+            key = (template["search_text"].casefold(), template["order"])
+            if key in known:
+                continue
+            query = dict(template, filters=dict(template["filters"]))
+            if price_from not in (None, ""):
+                query["price_from"] = str(price_from)
+            if price_to not in (None, ""):
+                query["price_to"] = str(price_to)
+            raw_queries.append(query)
+            known.add(key)
     if not raw_queries:
         raise ValueError("queries must contain at least one search")
     queries = [build_catalog_params(query) for query in raw_queries]

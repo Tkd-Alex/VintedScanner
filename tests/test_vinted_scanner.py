@@ -52,6 +52,22 @@ class ConfigurationTests(unittest.TestCase):
         self.assertIn("EliteDesk Mini", search_terms)
         self.assertIn("OptiPlex Micro", search_terms)
 
+    def test_discovery_queries_use_computer_catalog_and_price_range(self):
+        with patch.object(scanner.Config, "queries", []), patch.object(
+            scanner.Config, "hardware_add_discovery_queries", True
+        ), patch.object(scanner.Config, "hardware_discovery_price_from", 70), patch.object(
+            scanner.Config, "hardware_discovery_price_to", 300
+        ):
+            _catalog_url, queries, _headers = scanner.load_configuration(dry_run=True)
+        for query in queries:
+            self.assertEqual(query["attribute_ids[catalog]"], scanner.DISCOVERY_CATALOG_ID)
+            self.assertEqual(query["price_from"], "70")
+            self.assertEqual(query["price_to"], "300")
+        self.assertEqual(
+            scanner.DEFAULT_HARDWARE_DISCOVERY_QUERIES[0]["filters"]["catalog"],
+            [scanner.DISCOVERY_CATALOG_ID],
+        )
+
     def test_discovery_queries_can_be_disabled(self):
         with patch.object(scanner.Config, "queries", []), patch.object(
             scanner.Config, "hardware_add_discovery_queries", False
