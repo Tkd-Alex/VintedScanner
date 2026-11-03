@@ -54,6 +54,38 @@ class HardwareAnalysisTests(unittest.TestCase):
         self.assertIsNone(result["cpu"])
         self.assertIn("CPU esatta/core da verificare", result["missing"])
 
+    def test_cpu_has_half_of_total_score_and_outweighs_ram_difference(self):
+        stronger = enricher.analyze_hardware(
+            "Lenovo ThinkCentre M920q Tiny i5-8600T 8GB RAM 256GB SSD", price="150 EUR"
+        )
+        older = enricher.analyze_hardware(
+            "Lenovo ThinkCentre M910q Tiny i7-7700T 32GB RAM 256GB SSD", price="150 EUR"
+        )
+        self.assertTrue(stronger["target_system"])
+        self.assertEqual(stronger["score_parts"]["cpu"], 34)
+        self.assertGreater(stronger["score_parts"]["cpu"], older["score_parts"]["cpu"])
+        self.assertEqual(sum(stronger["score_parts"][part] for part in ("cpu", "price", "ram", "storage_expandability")), stronger["score"])
+
+    def test_ram_upgrade_costs_use_user_supplied_estimates(self):
+        result = enricher.analyze_hardware(
+            "Lenovo ThinkCentre M920q Tiny i5-8600T 8GB RAM 256GB SSD", price="150 EUR",
+            ram_8gb_upgrade_eur=50, ram_32gb_kit_eur=130,
+        )
+        self.assertEqual(result["total_to_16_eur"], 200)
+        self.assertEqual(result["total_to_32_eur"], 280)
+        self.assertIn("1×8 GB", result["ram_upgrade_note"])
+
+    def test_geekom_is_not_in_the_target_families(self):
+        result = enricher.analyze_hardware("GEEKOM A6 Ryzen 7 6800H 32GB 1TB SSD", price="350 EUR")
+        self.assertFalse(result["target_system"])
+        self.assertIsNone(result["target_family"])
+
+    def test_non_t_variant_i5_9500_is_known(self):
+        result = enricher.analyze_hardware("HP EliteDesk 800 G5 Mini i5-9500 16GB RAM 512GB SSD")
+        self.assertEqual(result["cpu"], "Intel Core i5-9500")
+        self.assertEqual(result["cores"], 6)
+        self.assertEqual(result["cpu_detail"], "6 core / 6 thread · TDP nominale 65 W")
+
     def test_html_is_escaped_by_caller_and_lines_include_analysis(self):
         item = {
             "title": "Test <mini>", "price": "100 EUR", "url": "https://vinted.test/1",

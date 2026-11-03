@@ -9,6 +9,7 @@ With this script, you no longer need to manually open the Vinted app and search 
 ## Features
 
 - **Automated Search**: The script performs searches on Vinted according to your custom queries.
+- **Separate RAM Hunt mode**: Enabled by default; finds under-€100 damaged laptops and listings mentioning 16/32 GB DDR4, for possible memory recovery. It has its own deduplication database and does not replace or filter the normal mini-PC notifications.
 - **Automatic Notifications**: Receive notifications through:
   - **Email**
   - **Slack**
@@ -235,18 +236,23 @@ To display all available command-line options:
 python3 vinted_scanner.py -h
 ```
 
-### Telegram Hardware Enrichment
+### Telegram Hardware Enrichment and Ranking
 
-This packaged version can append a local hardware analysis to each new Telegram alert. It keeps all results in the same message and defaults to Telegram only. See [HARDWARE_ENRICHMENT.md](HARDWARE_ENRICHMENT.md) for the data model, limitations, configuration and installation options.
+This tailored version adds a local hardware analysis to each relevant Telegram alert. The ranking is deliberately weighted for the next Proxmox node: **CPU/platform 50 points, estimated total price 25, RAM 10, storage/expandability 15**. The message displays the score breakdown plus estimated totals with 16 GB and 32 GB RAM.
 
-The default sample configuration uses:
+By default, strict filtering accepts only **HP EliteDesk Mini, Lenovo ThinkCentre Tiny, and Dell OptiPlex Micro** listings. Generic mini PCs, Geekom models, SFF/USFF variants, and barebones are skipped. Skipped listing IDs are stored too, so fuzzy-search false positives are not reconsidered on every polling cycle. Set `hardware_require_target_models = False` only if you intentionally want to disable this restriction.
+
+Default sample configuration:
 
 ```python
 notification_channels = ["telegram"]
 hardware_fetch_details = True
+hardware_require_target_models = True
+hardware_ram_8gb_upgrade_eur = 50
+hardware_ram_32gb_kit_eur = 130
 ```
 
-The extra detail request is attempted only for newly detected items and is non-fatal if Vinted does not return the page content. To skip it, set `hardware_fetch_details = False`.
+The RAM figures are editable assumptions, not live market prices. The €50 estimate assumes adding a compatible 8 GB module to an existing 8 GB setup; €130 assumes a 2×16 GB DDR4 kit. Cost estimates include listing price plus estimated RAM only, **not Vinted buyer-protection fees or shipping**. Missing or unclear RAM configuration stays marked as needing verification. The extra detail request is attempted only for newly detected items and is non-fatal if Vinted does not return the page content. To skip it, set `hardware_fetch_details = False`.
 
 ### Automation with Cron
 
@@ -297,3 +303,35 @@ There are two ways you can contribute to the development of **Vinted Scanner**:
 ### License
 
 This project is licensed under the [GNU General Public License v3.0](LICENSE).
+
+## RAM Hunt mode
+
+RAM Hunt runs alongside the normal mini-PC search and uses a separate local database,
+`vinted_ram_hunt_items.txt`. It does **not** use the strict EliteDesk Mini /
+ThinkCentre Tiny / OptiPlex Micro filter and it does not change normal mini-PC
+notifications. RAM Hunt notifications are sent through the same configured channel
+(the provided sample configuration selects Telegram only).
+
+The sample configuration enables RAM Hunt with a €100 maximum **listing** price
+(excluding shipping and buyer-protection fees). Its default searches include damaged/non-working
+laptops and listings explicitly mentioning 16 GB DDR4 or 32 GB DDR4. You can disable the feature with `ram_hunt_enabled = False`,
+change the ceiling with `ram_hunt_max_price_eur`, or customize the search dictionaries
+in `ram_hunt_queries`. These searches are additional catalogue requests on each run.
+Set `ram_hunt_fetch_details = True` only if you want an extra attempt to retrieve
+the listing description when the catalogue response omits it; this adds page requests.
+
+Alerts distinguish stronger claims (for example, 32 GB declared) from low-confidence
+donors where RAM capacity is not listed. A listing is not proof that DDR4 SO-DIMM
+modules are removable or working. Before buying, verify the exact laptop model, RAM
+form factor/type, number and size of modules, whether they can be removed, and the
+final cost including shipping and marketplace fees. A known 4/8 GB-only listing and
+listings identified as DDR3 are filtered out. The separate database prevents duplicate
+RAM Hunt alerts; ordinary mini-PC notifications keep using `vinted_items.txt`. As with the
+existing scanner, `--dry-run` records analyzed IDs, so listings shown during a dry run will
+not notify again on the next run.
+
+When updating an existing installation, merge the RAM Hunt settings from
+`Config.sample.py` into the existing `Config.py` rather than replacing credentials.
+If those settings are absent, the code uses the built-in defaults; set
+`ram_hunt_enabled = False` explicitly to turn the feature off.
+

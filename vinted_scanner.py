@@ -5,8 +5,10 @@ import email.utils
 import html
 import json
 import logging
+import re
 import smtplib
 import sys
+from decimal import Decimal, InvalidOperation
 from email.message import EmailMessage
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -20,6 +22,7 @@ import hardware_enricher
 
 PROJECT_DIR = Path(__file__).resolve().parent
 ITEMS_DATABASE_PATH = PROJECT_DIR / "vinted_items.txt"
+RAM_HUNT_DATABASE_PATH = PROJECT_DIR / "vinted_ram_hunt_items.txt"
 LOG_PATH = PROJECT_DIR / "vinted_scanner.log"
 REQUEST_TIMEOUT_SECONDS = 30
 
@@ -71,6 +74,38 @@ CATALOG_ORDER_VALUES = {
     "price_low_to_high",
     "relevance",
 }
+
+# RAM Hunt intentionally runs independently of the mini-PC search and its strict
+# chassis filter. The search terms are configurable in Config.py.
+RAM_HUNT_DEFAULT_MAX_PRICE_EUR = 100
+RAM_HUNT_DEFAULT_QUERIES = [
+    {"page": "1", "per_page": "24", "search_text": "portatile guasto", "order": "newest_first", "filters": {}, "price_to": "100"},
+    {"page": "1", "per_page": "24", "search_text": "notebook guasto", "order": "newest_first", "filters": {}, "price_to": "100"},
+    {"page": "1", "per_page": "24", "search_text": "laptop guasto", "order": "newest_first", "filters": {}, "price_to": "100"},
+    {"page": "1", "per_page": "24", "search_text": "portatile non funzionante", "order": "newest_first", "filters": {}, "price_to": "100"},
+    {"page": "1", "per_page": "24", "search_text": "portatile 32gb ddr4", "order": "newest_first", "filters": {}, "price_to": "100"},
+    {"page": "1", "per_page": "24", "search_text": "notebook 32gb ddr4", "order": "newest_first", "filters": {}, "price_to": "100"},
+    {"page": "1", "per_page": "24", "search_text": "portatile 16gb ddr4 guasto", "order": "newest_first", "filters": {}, "price_to": "100"},
+]
+
+LAPTOP_RE = re.compile(
+    r"\b(portatile|notebook|laptop|computer portatile|thinkpad|latitude|elitebook|"
+    r"probook|ideapad|inspiron|vivobook|zenbook|aspire|travelmate|matebook|"
+    r"macbook|chromebook|pavilion|precision|zbook|toughbook|swift|satellite|"
+    r"xps\s*\d|surface laptop)\b", re.IGNORECASE
+)
+DAMAGED_RE = re.compile(
+    r"\b(guasto|guasta|rotto|rotta|non funzionante|da riparare|non si accende|"
+    r"non accende|non parte|non avvia|schermo rotto|display rotto|senza video|"
+    r"difetto|difettoso|per ricambi|ricambi|broken|faulty|for parts|no power)\b",
+    re.IGNORECASE,
+)
+RAM_32_RE = re.compile(r"\b32\s*(?:gb|go|giga(?:byte)?)\b", re.IGNORECASE)
+RAM_16_RE = re.compile(r"\b16\s*(?:gb|go|giga(?:byte)?)\b", re.IGNORECASE)
+RAM_8_OR_LESS_RE = re.compile(r"\b(?:4|8)\s*(?:gb|go|giga(?:byte)?)\b", re.IGNORECASE)
+RAM_2X16_RE = re.compile(r"\b2\s*[x×]\s*16(?:\s*(?:gb|go))?\b", re.IGNORECASE)
+DDR4_RE = re.compile(r"\bddr\s*4\b", re.IGNORECASE)
+DDR3_RE = re.compile(r"\bddr\s*3\b", re.IGNORECASE)
 
 
 class CatalogError(RuntimeError):
@@ -498,6 +533,26 @@ def process_item(
     normalized_item = hardware_enricher.enrich_item(
         normalized_item, session=session, fetch_details=fetch_details
     )
+    analysis = normalized_item.get("hardware_analysis") or {}
+    require_target = bool(getattr(Config, "hardware_require_target_models", True))
+    if require_target and not analysis.get("target_system", False):
+        logging.info(
+            "Ignoring item outside target mini-PC families (id=%s, title=%r)",
+            normalized_item["id"], normalized_item["title"],
+        )
+        if dry_run:
+            print(
+                "SKIPPED — outside target: only HP EliteDesk Mini, "
+                "Lenovo ThinkCentre Tiny or Dell OptiPlex Micro are accepted.\n"
+                f"Title: {normalized_item['title']}\n"
+                f"URL: {normalized_item['url']}\n"
+            )
+        # Record ignored IDs too, otherwise every polling cycle would rediscover
+        # and re-evaluate the same fuzzy-search false positives.
+        save_analyzed_item(normalized_item["id"], database_path)
+        analyzed_items.add(normalized_item["id"])
+        return True
+
     extra_lines = hardware_enricher.build_telegram_lines(normalized_item, matched_query)
 
     if dry_run:
@@ -517,6 +572,240 @@ def process_item(
         save_analyzed_item(normalized_item["id"], database_path)
         analyzed_items.add(normalized_item["id"])
     return succeeded
+
+
+
+def load_ram_hunt_configuration():
+    """Return RAM Hunt query parameters and maximum listing price.
+
+    RAM Hunt defaults to enabled for this patched package, but can be disabled
+    explicitly with ``ram_hunt_enabled = False`` in Config.py.
+    """
+    enabled = bool(getattr(Config, "ram_hunt_enabled", True))
+    max_price = Decimal(str(getattr(
+        Config, "ram_hunt_max_price_eur", RAM_HUNT_DEFAULT_MAX_PRICE_EUR
+    )))
+    if max_price <= 0:
+        raise ValueError("ram_hunt_max_price_eur must be greater than zero")
+    if not enabled:
+        return [], max_price
+
+    configured = getattr(Config, "ram_hunt_queries", RAM_HUNT_DEFAULT_QUERIES)
+    if not isinstance(configured, list):
+        raise ValueError("ram_hunt_queries must be a list of search dictionaries")
+    if not configured:
+        return [], max_price
+
+    result = []
+    for configured_query in configured:
+        if not isinstance(configured_query, dict):
+            raise ValueError("each ram_hunt_queries entry must be a dictionary")
+        query = dict(configured_query)
+        existing_cap = query.get("price_to")
+        try:
+            effective_cap = min(max_price, Decimal(str(existing_cap))) if existing_cap not in (None, "") else max_price
+        except InvalidOperation as error:
+            raise ValueError("RAM Hunt price_to values must be numeric") from error
+        query["price_to"] = format(effective_cap, "f")
+        if "." in query["price_to"]:
+            query["price_to"] = query["price_to"].rstrip("0").rstrip(".")
+        if "page" not in query:
+            query["page"] = "1"
+        if "per_page" not in query:
+            query["per_page"] = "24"
+        if "order" not in query:
+            query["order"] = "newest_first"
+        if "filters" not in query:
+            query["filters"] = {}
+        result.append(build_catalog_params(query))
+    return result, max_price
+
+
+def parse_item_price_amount(item):
+    """Parse the numeric price from the raw catalogue item, or return None."""
+    price_data = item.get("price") if isinstance(item, dict) else None
+    if isinstance(price_data, dict):
+        raw_amount = price_data.get("amount")
+    else:
+        raw_amount = price_data
+    if raw_amount is None:
+        return None
+    match = re.search(r"\d+(?:[.,]\d{1,2})?", str(raw_amount).replace(" ", ""))
+    if not match:
+        return None
+    try:
+        return Decimal(match.group(0).replace(",", "."))
+    except InvalidOperation:
+        return None
+
+
+def classify_ram_hunt_candidate(item, max_price_eur=RAM_HUNT_DEFAULT_MAX_PRICE_EUR):
+    """Classify an under-budget laptop listing as a RAM recovery candidate.
+
+    Returns a small, human-readable classification or None for unrelated items.
+    Listing claims are not proof that modules are removable or functional.
+    """
+    if not isinstance(item, dict):
+        return None
+    price = parse_item_price_amount(item)
+    if price is None or price > Decimal(str(max_price_eur)):
+        return None
+
+    title = str(item.get("title") or "")
+    description = str(item.get("description") or "")
+    text = f"{title}\n{description}"
+    if not LAPTOP_RE.search(text):
+        return None
+
+    damaged = bool(DAMAGED_RE.search(text))
+    has_32 = bool(RAM_32_RE.search(text) or RAM_2X16_RE.search(text))
+    has_16 = bool(RAM_16_RE.search(text))
+    has_ddr4 = bool(DDR4_RE.search(text))
+    has_ddr3 = bool(DDR3_RE.search(text))
+    has_small_only = bool(RAM_8_OR_LESS_RE.search(text)) and not has_16 and not has_32
+
+    # Avoid alerts for listings explicitly identified as DDR3: it does not meet
+    # the desired DDR4 recovery target. Unknown generation stays a verification item.
+    if has_ddr3 and not has_ddr4:
+        return None
+    if has_small_only:
+        return None
+
+    if has_32:
+        return {
+            "tier": "ALTA — 32 GB dichiarati",
+            "reason": "L'annuncio menziona 32 GB o 2×16 GB; la configurazione reale va verificata.",
+            "ram_claim": "32 GB dichiarati" + (" DDR4" if has_ddr4 else "; generazione da verificare"),
+            "confidence": "alta sul dato dichiarato, non sul funzionamento",
+        }
+
+    if damaged and has_16 and has_ddr4:
+        return {
+            "tier": "MEDIA — 16 GB DDR4 dichiarati",
+            "reason": "Possibile recupero di moduli DDR4; quantità di moduli e capacità dei singoli banchi da verificare.",
+            "ram_claim": "16 GB DDR4 dichiarati",
+            "confidence": "media; moduli e funzionamento non verificati",
+        }
+
+    if damaged and has_16:
+        return {
+            "tier": "DA VERIFICARE — 16 GB dichiarati",
+            "reason": "La capacità è menzionata, ma il tipo di RAM non è confermato come DDR4.",
+            "ram_claim": "16 GB dichiarati; generazione da verificare",
+            "confidence": "bassa finché non viene verificato il tipo di RAM",
+        }
+
+    if damaged and not (has_16 or has_32):
+        return {
+            "tier": "DA VERIFICARE — RAM non specificata",
+            "reason": "Portatile guasto entro budget; potrebbe essere un donatore, ma capacità e tipo di RAM non sono dichiarati.",
+            "ram_claim": "Capacità/tipo RAM non specificati",
+            "confidence": "bassa; chiedere al venditore prima di acquistare",
+        }
+
+    return None
+
+
+def ram_hunt_telegram_lines(candidate, max_price_eur, matched_query=None):
+    """Build concise, actionable Telegram notes for a RAM Hunt candidate."""
+    lines = [
+        "🧩 RAM HUNT — possibile portatile donatore",
+        f"Priorità: {candidate['tier']}",
+        f"RAM rilevata nell'annuncio: {candidate['ram_claim']}",
+        f"Motivo: {candidate['reason']}",
+        f"Limite prezzo annuncio: €{max_price_eur} (spedizione/commissioni escluse)",
+        f"Affidabilità: {candidate['confidence']}",
+        "Prima di comprare: verifica DDR4 SO-DIMM rimovibile, numero/capacità dei moduli, funzionamento, modello esatto e costo totale con spedizione/commissioni.",
+        "Il testo dell'annuncio non prova che la RAM sia presente o funzionante.",
+    ]
+    if matched_query:
+        lines.insert(1, f"Ricerca: {matched_query}")
+    return lines
+
+
+def process_ram_hunt_item(
+    raw_item,
+    analyzed_items,
+    dry_run,
+    max_price_eur,
+    database_path=RAM_HUNT_DATABASE_PATH,
+    matched_query=None,
+    session=None,
+):
+    """Independently process a RAM Hunt listing using its own dedupe database."""
+    normalized = normalize_item(raw_item)
+    if not normalized or normalized["id"] in analyzed_items:
+        return True
+
+    # The catalogue often provides only a title. Fetching a detail page is opt-in
+    # for RAM Hunt to keep the added polling load modest and predictable.
+    if (not normalized["description"]
+            and bool(getattr(Config, "ram_hunt_fetch_details", False))):
+        normalized["description"] = hardware_enricher.fetch_listing_description(
+            normalized["url"], session=session
+        )
+
+    candidate = classify_ram_hunt_candidate(raw_item, max_price_eur)
+    if candidate is None and normalized["description"]:
+        item_for_classification = dict(raw_item)
+        item_for_classification["description"] = normalized["description"]
+        candidate = classify_ram_hunt_candidate(item_for_classification, max_price_eur)
+
+    if candidate is None:
+        # Store irrelevant fuzzy-search results separately so they are not
+        # reprocessed on every cycle; this does not affect normal mini-PC alerts.
+        save_analyzed_item(normalized["id"], database_path)
+        analyzed_items.add(normalized["id"])
+        logging.info("RAM Hunt ignored non-candidate listing id=%s title=%r", normalized["id"], normalized["title"])
+        if dry_run:
+            print(f"RAM HUNT SKIPPED: {normalized['title']} — outside candidate rules\n")
+        return True
+
+    extra_lines = ram_hunt_telegram_lines(candidate, max_price_eur, matched_query)
+    if dry_run:
+        print(f"RAM HUNT CANDIDATE: {normalized['title']}")
+        print(f"Price: {normalized['price']}")
+        print(f"URL: {normalized['url']}")
+        for line in extra_lines:
+            print(line)
+        print()
+        succeeded = True
+    else:
+        succeeded = send_notifications(
+            normalized["title"], normalized["price"], normalized["url"],
+            normalized["image"], matched_query, extra_lines=extra_lines,
+        )
+
+    if succeeded:
+        save_analyzed_item(normalized["id"], database_path)
+        analyzed_items.add(normalized["id"])
+    return succeeded
+
+
+def process_ram_hunt_queries(
+    session, catalog_url, queries, api_headers, analyzed_items, dry_run, max_price_eur,
+):
+    """Run RAM Hunt queries without applying the main mini-PC chassis filter."""
+    processing_failed = False
+    for params in queries:
+        matched_query = params.get("search_text") or "RAM Hunt"
+        try:
+            items = get_catalog_items(session, catalog_url, params, api_headers)
+        except CatalogError as error:
+            logging.error("RAM Hunt query failed (%s): %s", matched_query, error)
+            processing_failed = True
+            continue
+        for item in items:
+            # Enforce a price cap locally too, even when Vinted's API filter is fuzzy.
+            amount = parse_item_price_amount(item) if isinstance(item, dict) else None
+            if amount is None or amount > Decimal(str(max_price_eur)):
+                continue
+            if not process_ram_hunt_item(
+                item, analyzed_items, dry_run, max_price_eur,
+                matched_query=matched_query, session=session,
+            ):
+                processing_failed = True
+    return processing_failed
 
 
 def initialize_vinted_session(marketplace_url):
@@ -566,12 +855,16 @@ def load_configuration(dry_run=False):
 
 
 def main(dry_run=False):
-    """Run the scanner and return a process exit code."""
+    """Run mini-PC searches and, independently, the optional RAM Hunt search."""
     configure_logging()
     try:
         catalog_url, queries, api_headers = load_configuration(dry_run)
+        ram_hunt_queries, ram_hunt_max_price = load_ram_hunt_configuration()
         analyzed_items = load_analyzed_items()
-    except (AttributeError, OSError, ValueError) as error:
+        ram_hunt_items = (
+            load_analyzed_items(RAM_HUNT_DATABASE_PATH) if ram_hunt_queries else set()
+        )
+    except (AttributeError, OSError, ValueError, InvalidOperation) as error:
         message = f"Configuration or local database error: {error}"
         logging.error(message)
         print(message, file=sys.stderr)
@@ -588,9 +881,16 @@ def main(dry_run=False):
         api_headers["X-Anon-Id"] = anon_id
 
     try:
+        # Keep the original mini-PC search behavior and dedupe database intact.
         query_failed = process_queries(
             session, catalog_url, queries, api_headers, analyzed_items, dry_run
         )
+        if ram_hunt_queries:
+            ram_hunt_failed = process_ram_hunt_queries(
+                session, catalog_url, ram_hunt_queries, api_headers,
+                ram_hunt_items, dry_run, ram_hunt_max_price,
+            )
+            query_failed = query_failed or ram_hunt_failed
     except OSError as error:
         logging.error("Unable to update the local database: %s", error)
         return 1

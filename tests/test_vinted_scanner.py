@@ -232,10 +232,11 @@ class CatalogueTests(unittest.TestCase):
 class ItemProcessingTests(unittest.TestCase):
     item = {
         "id": 123,
-        "title": "Test item",
+        "title": "Lenovo ThinkCentre M920q Tiny i5-8600T 16GB RAM 256GB SSD",
         "url": "https://example.test/items/123",
         "price": {"amount": "10", "currency_code": "EUR"},
         "photo": {"full_size_url": "https://example.test/image.jpg"},
+        "description": "Lenovo ThinkCentre M920q Tiny i5-8600T 16GB RAM 256GB SSD",
     }
 
     @patch("vinted_scanner.send_notifications", return_value=False)
@@ -319,6 +320,25 @@ class ItemProcessingTests(unittest.TestCase):
             print_item.assert_called_once()
             self.assertEqual(print_item.call_args.args[-1], "gl.inet")
 
+    @patch("vinted_scanner.send_notifications")
+    @patch.object(scanner.Config, "hardware_fetch_details", False)
+    def test_non_target_listing_is_skipped_and_recorded(self, send_notifications):
+        item = dict(self.item)
+        item["id"] = 987
+        item["title"] = "GEEKOM A6 Ryzen 7 6800H 32GB RAM 1TB SSD"
+        item["description"] = item["title"]
+        with tempfile.TemporaryDirectory() as directory:
+            database_path = Path(directory) / "items.txt"
+            database_path.touch()
+            analyzed_items = set()
+            succeeded = scanner.process_item(
+                item, analyzed_items, dry_run=False, database_path=database_path
+            )
+            self.assertTrue(succeeded)
+            self.assertEqual(analyzed_items, {"987"})
+            self.assertEqual(database_path.read_text(encoding="utf-8"), "987\n")
+            send_notifications.assert_not_called()
+
 
 class MainTests(unittest.TestCase):
     @patch("vinted_scanner.process_queries", return_value=True)
@@ -337,13 +357,92 @@ class MainTests(unittest.TestCase):
         load_configuration.return_value = ("catalog-url", [{}], {})
         initialize_session.return_value.cookies.get.return_value = None
 
-        exit_code = scanner.main(dry_run=False)
+        with patch.object(scanner.Config, "ram_hunt_enabled", False):
+            exit_code = scanner.main(dry_run=False)
 
         self.assertEqual(exit_code, 1)
         configure_logging.assert_called_once()
-        load_analyzed_items.assert_called_once()
+        load_analyzed_items.assert_called_once_with()
         process_queries.assert_called_once()
 
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RamHuntTests(unittest.TestCase):
+    def test_ram_hunt_loads_default_queries_with_price_cap(self):
+        with patch.object(scanner.Config, "ram_hunt_enabled", True), patch.object(
+            scanner.Config, "ram_hunt_max_price_eur", 100
+        ), patch.object(scanner.Config, "ram_hunt_queries", scanner.RAM_HUNT_DEFAULT_QUERIES):
+            queries, cap = scanner.load_ram_hunt_configuration()
+        self.assertEqual(len(queries), 7)
+        self.assertEqual(cap, 100)
+        self.assertTrue(all(query["price_to"] == "100" for query in queries))
+
+    def test_ram_hunt_can_be_disabled(self):
+        with patch.object(scanner.Config, "ram_hunt_enabled", False):
+            queries, cap = scanner.load_ram_hunt_configuration()
+        self.assertEqual(queries, [])
+        self.assertEqual(cap, 100)
+
+    def test_ram_hunt_flags_broken_laptop_with_ram_unspecified(self):
+        item = {
+            "id": 1, "title": "HP EliteBook 840 G5 portatile guasto",
+            "url": "https://www.vinted.it/items/1",
+            "price": {"amount": "45", "currency_code": "EUR"},
+        }
+        candidate = scanner.classify_ram_hunt_candidate(item, 100)
+        self.assertIsNotNone(candidate)
+        self.assertIn("RAM non specificata", candidate["tier"])
+
+    def test_ram_hunt_flags_32gb_ddr4_listing_under_100_without_fault_claim(self):
+        item = {
+            "id": 2, "title": "Dell Latitude laptop 32GB DDR4 RAM",
+            "url": "https://www.vinted.it/items/2",
+            "price": {"amount": "89", "currency_code": "EUR"},
+        }
+        candidate = scanner.classify_ram_hunt_candidate(item, 100)
+        self.assertIsNotNone(candidate)
+        self.assertIn("32 GB dichiarati", candidate["tier"])
+
+    def test_ram_hunt_rejects_over_budget_mini_pc_and_explicit_8gb_donor(self):
+        over_budget = {
+            "id": 3, "title": "HP EliteBook portatile guasto 32GB DDR4",
+            "url": "https://www.vinted.it/items/3",
+            "price": {"amount": "101", "currency_code": "EUR"},
+        }
+        mini_pc = {
+            "id": 4, "title": "HP EliteDesk Mini 32GB DDR4",
+            "url": "https://www.vinted.it/items/4",
+            "price": {"amount": "50", "currency_code": "EUR"},
+        }
+        small_ram = {
+            "id": 5, "title": "Dell Latitude 8GB RAM guasto",
+            "url": "https://www.vinted.it/items/5",
+            "price": {"amount": "60", "currency_code": "EUR"},
+        }
+        self.assertIsNone(scanner.classify_ram_hunt_candidate(over_budget, 100))
+        self.assertIsNone(scanner.classify_ram_hunt_candidate(mini_pc, 100))
+        self.assertIsNone(scanner.classify_ram_hunt_candidate(small_ram, 100))
+
+    @patch("vinted_scanner.send_notifications", return_value=True)
+    def test_ram_hunt_uses_separate_database_and_sends_candidate(self, send_notifications):
+        item = {
+            "id": 6, "title": "Lenovo ThinkPad T480 16GB DDR4 guasto",
+            "url": "https://www.vinted.it/items/6",
+            "price": {"amount": "75", "currency_code": "EUR"},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            database_path = Path(directory) / "ram_hunt_items.txt"
+            analyzed = set()
+            result = scanner.process_ram_hunt_item(
+                item, analyzed, dry_run=False, max_price_eur=100,
+                database_path=database_path, matched_query="portatile guasto",
+            )
+            self.assertTrue(result)
+            self.assertEqual(analyzed, {"6"})
+            self.assertEqual(database_path.read_text(encoding="utf-8"), "6\n")
+        send_notifications.assert_called_once()
+        extra_lines = send_notifications.call_args.kwargs["extra_lines"]
+        self.assertTrue(any("RAM HUNT" in line for line in extra_lines))

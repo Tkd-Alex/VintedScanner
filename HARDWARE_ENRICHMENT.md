@@ -8,7 +8,9 @@ VintedScanner still discovers listings and handles duplicate detection. Before s
 - CPU model, core/thread count and reference TDP when the exact model is in the local catalog;
 - RAM and storage parsed from listing text;
 - graphics identified in the listing or inferred from a recognized CPU's integrated GPU;
-- a transparent 0–100 Proxmox suitability heuristic;
+- an explainable 0–100 score weighted **CPU 50 / price 25 / RAM 10 / storage and expandability 15**;
+- estimated total prices for 16 GB and 32 GB RAM upgrades;
+- strict filtering for HP EliteDesk Mini, Lenovo ThinkCentre Tiny, and Dell OptiPlex Micro listings;
 - a concise note about AI acceleration and details that should be verified with the seller.
 
 Only Telegram is enabled by default through `notification_channels = ["telegram"]`. E-mail and Slack values are left empty in `Config.sample.py` and are not sent while they are not selected.
@@ -19,7 +21,9 @@ This module is deterministic and local. It does not call an external AI service.
 
 If the catalogue result does not include a description and `hardware_fetch_details = True`, the module makes at most one normal page request for the newly detected listing, with a 15-second timeout. It does not rotate proxies or attempt to bypass access controls. If page retrieval fails, the notification still goes out with the data already available and marks missing fields for verification. Set `hardware_fetch_details = False` to disable these extra page requests.
 
-The score estimates hardware fit for a small Proxmox node; it is not a market-price appraisal, a benchmark, or an AI performance guarantee. Storage is not treated as RAM, and unknown CPU models are not assigned invented core counts.
+The score estimates suitability for a small Proxmox node; CPU model tiers are curated relative estimates, not fresh benchmark results. Price points are based on the listing price plus the estimated cost to reach 16 GB RAM. The displayed totals include listing price and RAM estimate, but exclude Vinted buyer-protection fees and shipping. The default RAM assumptions are €50 for adding a compatible 8 GB module to an existing 8 GB setup, and €130 for a 2×16 GB DDR4 kit; edit them in `Config.py` when prices change. Unknown RAM layout is not treated as guaranteed compatible.
+
+By default, only HP EliteDesk Mini, Lenovo ThinkCentre Tiny and Dell OptiPlex Micro listings pass the hard target filter. Other models—including generic mini PCs, Geekom models, SFF/USFF systems and barebones—are ignored. Ignored IDs are persisted in `vinted_items.txt`, so those results are not repeatedly revisited on each scan. Set `hardware_require_target_models = False` only to disable this behavior.
 
 ## Installation
 
@@ -31,6 +35,9 @@ The score estimates hardware fit for a small Proxmox node; it is not a market-pr
    ```python
    notification_channels = ["telegram"]
    hardware_fetch_details = True
+   hardware_require_target_models = True
+   hardware_ram_8gb_upgrade_eur = 50
+   hardware_ram_32gb_kit_eur = 130
    ```
 
 5. Keep your existing `queries`, `telegram_bot_token`, and `telegram_chat_id`. Do not replace your personal `Config.py` with the sample file unless you intend to recreate all settings manually.

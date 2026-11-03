@@ -16,6 +16,27 @@ from typing import Any
 
 REQUEST_TIMEOUT_SECONDS = 15
 MAX_DESCRIPTION_CHARS = 520
+DEFAULT_RAM_8GB_UPGRADE_EUR = 50
+DEFAULT_RAM_32GB_KIT_EUR = 130
+
+# Relative CPU capability points on the 0-50 portion of the ranking. These are
+# curated tiers for this use case, not benchmark results. Update when the local
+# CPU catalog is extended or better model-specific data becomes available.
+CPU_PERFORMANCE_POINTS: dict[str, int] = {
+    "i56500t": 19, "i57500": 23, "i57500t": 22,
+    "i58400t": 30, "i58500": 34, "i58500t": 32, "i58600t": 34,
+    "i76700t": 24, "i77700t": 27, "i78700t": 39, "i78700": 43,
+    "i59500": 37, "i59500t": 35, "i79700": 47, "i79700t": 44,
+    "i510400": 39, "i510500": 42, "i510500t": 40,
+    "i710700": 50, "i710700t": 48,
+    "i511500": 45, "i511500t": 43, "i711700": 50, "i711700t": 50,
+    "i512500": 48, "i512500t": 47, "i712700": 50, "i712700t": 50,
+    "n100": 17,
+    "ryzen3pro2200ge": 17, "ryzen5pro2400ge": 23,
+    "ryzen5pro4650ge": 37, "ryzen7pro4750ge": 43,
+    "ryzen5pro5650ge": 40, "ryzen7pro5750ge": 47,
+    "ryzen56600h": 44, "ryzen76800h": 50,
+}
 
 # Keys are canonical, lowercase tokens. Specifications are reference data for
 # commonly listed mini-PC CPUs; frequencies are intentionally omitted because
@@ -29,16 +50,25 @@ CPU_CATALOG: dict[str, dict[str, Any]] = {
     "i58500t": {"name": "Intel Core i5-8500T", "cores": 6, "threads": 6, "tdp_w": 35, "gpu": "Intel UHD Graphics 630"},
     "i58600t": {"name": "Intel Core i5-8600T", "cores": 6, "threads": 6, "tdp_w": 35, "gpu": "Intel UHD Graphics 630"},
     "i76700t": {"name": "Intel Core i7-6700T", "cores": 4, "threads": 8, "tdp_w": 35, "gpu": "Intel HD Graphics 530"},
+    "i78700": {"name": "Intel Core i7-8700", "cores": 6, "threads": 12, "tdp_w": 65, "gpu": "Intel UHD Graphics 630"},
     "i77700t": {"name": "Intel Core i7-7700T", "cores": 4, "threads": 8, "tdp_w": 35, "gpu": "Intel HD Graphics 630"},
     "i78700t": {"name": "Intel Core i7-8700T", "cores": 6, "threads": 12, "tdp_w": 35, "gpu": "Intel UHD Graphics 630"},
+    "i59500": {"name": "Intel Core i5-9500", "cores": 6, "threads": 6, "tdp_w": 65, "gpu": "Intel UHD Graphics 630"},
     "i59500t": {"name": "Intel Core i5-9500T", "cores": 6, "threads": 6, "tdp_w": 35, "gpu": "Intel UHD Graphics 630"},
     "i79700": {"name": "Intel Core i7-9700", "cores": 8, "threads": 8, "tdp_w": 65, "gpu": "Intel UHD Graphics 630"},
     "i79700t": {"name": "Intel Core i7-9700T", "cores": 8, "threads": 8, "tdp_w": 35, "gpu": "Intel UHD Graphics 630"},
+    "i510400": {"name": "Intel Core i5-10400", "cores": 6, "threads": 12, "tdp_w": 65, "gpu": "Intel UHD Graphics 630"},
+    "i510500": {"name": "Intel Core i5-10500", "cores": 6, "threads": 12, "tdp_w": 65, "gpu": "Intel UHD Graphics 630"},
     "i510500t": {"name": "Intel Core i5-10500T", "cores": 6, "threads": 12, "tdp_w": 35, "gpu": "Intel UHD Graphics 630"},
+    "i710700": {"name": "Intel Core i7-10700", "cores": 8, "threads": 16, "tdp_w": 65, "gpu": "Intel UHD Graphics 630"},
     "i710700t": {"name": "Intel Core i7-10700T", "cores": 8, "threads": 16, "tdp_w": 35, "gpu": "Intel UHD Graphics 630"},
+    "i511500": {"name": "Intel Core i5-11500", "cores": 6, "threads": 12, "tdp_w": 65, "gpu": "Intel UHD Graphics 750"},
     "i511500t": {"name": "Intel Core i5-11500T", "cores": 6, "threads": 12, "tdp_w": 35, "gpu": "Intel UHD Graphics 750"},
+    "i711700": {"name": "Intel Core i7-11700", "cores": 8, "threads": 16, "tdp_w": 65, "gpu": "Intel UHD Graphics 750"},
     "i711700t": {"name": "Intel Core i7-11700T", "cores": 8, "threads": 16, "tdp_w": 35, "gpu": "Intel UHD Graphics 750"},
+    "i512500": {"name": "Intel Core i5-12500", "cores": 6, "threads": 12, "tdp_w": 65, "gpu": "Intel UHD Graphics 770"},
     "i512500t": {"name": "Intel Core i5-12500T", "cores": 6, "threads": 12, "tdp_w": 35, "gpu": "Intel UHD Graphics 770"},
+    "i712700": {"name": "Intel Core i7-12700", "cores": 12, "threads": 20, "tdp_w": 65, "gpu": "Intel UHD Graphics 770"},
     "i712700t": {"name": "Intel Core i7-12700T", "cores": 12, "threads": 20, "tdp_w": 35, "gpu": "Intel UHD Graphics 770"},
     "n100": {"name": "Intel Processor N100", "cores": 4, "threads": 4, "tdp_w": 6, "gpu": "Intel UHD Graphics (Alder Lake-N)"},
     "ryzen3pro2200ge": {"name": "AMD Ryzen 3 PRO 2200GE", "cores": 4, "threads": 4, "tdp_w": 35, "gpu": "Radeon Vega 8 Graphics"},
@@ -229,9 +259,9 @@ def _find_storage(text: str) -> list[str]:
 
 def _find_model(text: str) -> str | None:
     patterns = [
-        (r"\bLenovo\s+ThinkCentre\s+M\d{3,4}[qpx]?\b", "Lenovo ThinkCentre"),
-        (r"\bLenovo\s+M\d{3,4}[qpx]?\b", "Lenovo ThinkCentre"),
-        (r"\bThinkCentre\s+M\d{3,4}[qpx]?\b", "Lenovo ThinkCentre"),
+        (r"\bLenovo\s+ThinkCentre\s+M(?:\d{3,4}|[789]\d{1,2})[qpx]?\b", "Lenovo ThinkCentre"),
+        (r"\bLenovo\s+M(?:\d{3,4}|[789]\d{1,2})[qpx]?\b", "Lenovo ThinkCentre"),
+        (r"\bThinkCentre\s+M(?:\d{3,4}|[789]\d{1,2})[qpx]?\b", "Lenovo ThinkCentre"),
         (r"\b(?:HP\s+)?EliteDesk\s+\d{3,4}\s*(?:G\d\s*)?(?:Mini|DM|Desktop Mini)\b", "HP EliteDesk"),
         (r"\b(?:HP\s+)?ProDesk\s+\d{3,4}\s*(?:G\d\s*)?(?:Mini|DM|Desktop Mini)\b", "HP ProDesk"),
         (r"\bDell\s+OptiPlex\s+\d{4}\s+Micro\b", "Dell OptiPlex"),
@@ -245,18 +275,100 @@ def _find_model(text: str) -> str | None:
     return None
 
 
-def analyze_hardware(title: str, description: str = "", price: str = "") -> dict[str, Any]:
-    """Extract a small structured hardware profile from listing text."""
-    text = f"{title or ''}\n{description or ''}"
+def _is_target_system(text: str) -> tuple[bool, str | None]:
+    """Accept only the compact business-PC families requested by the user.
+
+    A generic "mini PC", SFF/USFF chassis, or a GEEKOM model is not enough.
+    The family and the matching small-form-factor marker must be explicit.
+    """
+    checks = [
+        (r"\b(?:HP\s+)?EliteDesk\s+(?:(?:\d{3,4})(?:\s+G\d)?\s+)?(?:Mini|DM|Desktop\s+Mini)\b", "HP EliteDesk Mini"),
+        (r"\b(?:Lenovo\s+)?ThinkCentre\s+(?:M(?:\d{3,4}|[789]\d{1,2})q|[^\n]{0,35}\bTiny)\b", "Lenovo ThinkCentre Tiny"),
+        (r"\b(?:Dell\s+)?OptiPlex\s+\d{4}\s+Micro(?:\s+Form\s+Factor)?\b", "Dell OptiPlex Micro"),
+    ]
+    for pattern, family in checks:
+        if re.search(pattern, text, re.I):
+            return True, family
+    return False, None
+
+
+def _parse_price_eur(price: str | None) -> float | None:
+    """Read a simple EUR amount from normalized Vinted price text."""
+    if not price:
+        return None
+    value = str(price).strip().replace("€", " ")
+    # Handle European thousands/decimal separators, e.g. 1.299,00 EUR.
+    european = re.search(r"(?<!\d)(\d{1,3}(?:\.\d{3})+,\d{1,2})(?!\d)", value)
+    if european:
+        return float(european.group(1).replace(".", "").replace(",", "."))
+    match = re.search(r"(?<!\d)(\d+(?:[.,]\d{1,2})?)(?!\d)", value)
+    if not match:
+        return None
+    try:
+        return float(match.group(1).replace(",", "."))
+    except ValueError:
+        return None
+
+
+def _upgrade_estimates(
+    ram_gb: int | None,
+    price: str | None,
+    ram_8gb_upgrade_eur: float,
+    ram_32gb_kit_eur: float,
+) -> dict[str, Any]:
+    """Estimate outlay for 16/32 GB without assuming unknown RAM topology."""
+    listing_price = _parse_price_eur(price)
+    upgrade_16: float | None
+    upgrade_32: float | None
+    note = None
+
+    if ram_gb is None:
+        upgrade_16 = None
+        upgrade_32 = None
+        note = "RAM non indicata: costo upgrade da verificare"
+    else:
+        if ram_gb >= 16:
+            upgrade_16 = 0.0
+        elif ram_gb == 8:
+            # Assumes the existing 8 GB is usable and a compatible slot is free.
+            upgrade_16 = float(ram_8gb_upgrade_eur)
+            note = "16 GB stimati: ipotesi di aggiunta 1×8 GB compatibile"
+        else:
+            upgrade_16 = None
+            note = "RAM attuale sotto 8/16 GB: costo per 16 GB da verificare"
+        upgrade_32 = 0.0 if ram_gb >= 32 else float(ram_32gb_kit_eur)
+
+    return {
+        "listing_price_eur": listing_price,
+        "upgrade_to_16_eur": upgrade_16,
+        "upgrade_to_32_eur": upgrade_32,
+        "total_to_16_eur": listing_price + upgrade_16 if listing_price is not None and upgrade_16 is not None else None,
+        "total_to_32_eur": listing_price + upgrade_32 if listing_price is not None and upgrade_32 is not None else None,
+        "ram_upgrade_note": note,
+    }
+
+
+def analyze_hardware(
+    title: str,
+    description: str = "",
+    price: str = "",
+    ram_8gb_upgrade_eur: float = DEFAULT_RAM_8GB_UPGRADE_EUR,
+    ram_32gb_kit_eur: float = DEFAULT_RAM_32GB_KIT_EUR,
+) -> dict[str, Any]:
+    """Extract a small structured hardware profile and an explainable ranking."""
+    title = title or ""
+    description = description or ""
+    text = f"{title}\n{description}"
     cpu_name, cpu = _canonical_cpu(text)
     ram_gb = _find_ram_gb(text)
     storage = _find_storage(text)
-    model = _find_model(title or "") or _find_model(text)
+    model = _find_model(title) or _find_model(text)
+    target_system, target_family = _is_target_system(text)
 
     form_factor = None
     form_patterns = [
         (r"\bTiny\b", "Tiny"),
-        (r"\bMicro\b", "Micro"),
+        (r"\bMicro(?:\s+Form\s+Factor)?\b", "Micro"),
         (r"\bMini(?:\s*PC)?\b", "Mini"),
         (r"\bUSFF\b", "USFF"),
         (r"\bDM\b", "Desktop Mini"),
@@ -284,8 +396,21 @@ def analyze_hardware(title: str, description: str = "", price: str = "") -> dict
     else:
         cpu_detail = "Modello non riconosciuto con sufficiente certezza"
 
-    score = _score(known_cores, ram_gb, storage, form_factor, gpu, bool(discrete_match))
-    if score >= 78:
+    pricing = _upgrade_estimates(
+        ram_gb, price, ram_8gb_upgrade_eur, ram_32gb_kit_eur
+    )
+    score_parts = _score(
+        cpu_name=cpu_name,
+        ram_gb=ram_gb,
+        storage=storage,
+        model=model,
+        target_system=target_system,
+        pricing=pricing,
+    )
+    score = score_parts["total"]
+    if not target_system:
+        verdict = "Fuori target: serve EliteDesk Mini, ThinkCentre Tiny o OptiPlex Micro"
+    elif score >= 78:
         verdict = "Candidato interessante"
     elif score >= 58:
         verdict = "Da valutare"
@@ -293,6 +418,8 @@ def analyze_hardware(title: str, description: str = "", price: str = "") -> dict
         verdict = "Debole per il tuo obiettivo Proxmox"
 
     missing = []
+    if not target_system:
+        missing.append("fuori target: famiglia/chassis non confermati come Mini/Tiny/Micro richiesto")
     if not cpu_name:
         missing.append("CPU esatta/core da verificare")
     if ram_gb is None:
@@ -301,7 +428,10 @@ def analyze_hardware(title: str, description: str = "", price: str = "") -> dict
         missing.append("tipo e capacità storage da verificare")
     if not form_factor:
         missing.append("formato Mini/Tiny/Micro da confermare")
-    missing.append("verificare stato reale, alimentatore e RAM massima supportata")
+    missing.append("verificare RAM massima, slot liberi, alimentatore e stato reale")
+    missing.append("verificare espansione storage e compatibilità di eventuali upgrade")
+    if pricing.get("ram_upgrade_note"):
+        missing.append(pricing["ram_upgrade_note"])
 
     ai_note = _ai_note(gpu, bool(discrete_match), cpu_name)
     return {
@@ -314,60 +444,120 @@ def analyze_hardware(title: str, description: str = "", price: str = "") -> dict
         "storage": storage,
         "gpu": gpu,
         "form_factor": form_factor,
+        "target_system": target_system,
+        "target_family": target_family,
         "score": score,
+        "score_parts": score_parts,
         "verdict": verdict,
         "missing": missing,
         "ai_note": ai_note,
         "price": price,
-        "description": re.sub(r"\s+", " ", description or "").strip()[:MAX_DESCRIPTION_CHARS],
+        **pricing,
+        "description": re.sub(r"\s+", " ", description).strip()[:MAX_DESCRIPTION_CHARS],
         "spec_source": "specifiche di riferimento locali + testo annuncio; non è un test del dispositivo",
     }
 
 
-def _score(cores: int | None, ram_gb: int | None, storage: list[str], form_factor: str | None, gpu: str | None, discrete_gpu: bool) -> int:
-    if cores is None:
-        cpu_points = 12
-    elif cores >= 8:
-        cpu_points = 40
-    elif cores >= 6:
-        cpu_points = 34
-    elif cores >= 4:
-        cpu_points = 20
+def _score(
+    cpu_name: str | None,
+    ram_gb: int | None,
+    storage: list[str],
+    model: str | None,
+    target_system: bool,
+    pricing: dict[str, Any],
+) -> dict[str, Any]:
+    """Return 100 explainable points: CPU 50, price 25, RAM 10, storage 15."""
+    if cpu_name:
+        cpu_label = cpu_name.lower()
+        for prefix in ("intel core ", "intel processor ", "amd "):
+            if cpu_label.startswith(prefix):
+                cpu_label = cpu_label[len(prefix):]
+                break
+        cpu_key = re.sub(r"[^a-z0-9]", "", cpu_label)
+        # CPU names in the catalog can include spaces; map them to catalog keys.
+        cpu_points = CPU_PERFORMANCE_POINTS.get(cpu_key, 8)
     else:
-        cpu_points = 8
+        cpu_points = 0
+
+    effective_price = pricing.get("total_to_16_eur")
+    if effective_price is None:
+        effective_price = pricing.get("listing_price_eur")
+    if effective_price is None:
+        price_points = 0
+    elif effective_price <= 200:
+        price_points = 25
+    elif effective_price <= 250:
+        price_points = 23
+    elif effective_price <= 300:
+        price_points = 20
+    elif effective_price <= 350:
+        price_points = 17
+    elif effective_price <= 400:
+        price_points = 14
+    elif effective_price <= 450:
+        price_points = 11
+    elif effective_price <= 500:
+        price_points = 8
+    elif effective_price <= 600:
+        price_points = 4
+    else:
+        price_points = 0
 
     if ram_gb is None:
-        ram_points = 10
+        ram_points = 4
     elif ram_gb >= 32:
-        ram_points = 25
+        ram_points = 10
     elif ram_gb >= 16:
-        ram_points = 18
-    elif ram_gb >= 8:
         ram_points = 8
+    elif ram_gb >= 8:
+        ram_points = 6
     else:
-        ram_points = 3
+        ram_points = 2
 
     max_gb = 0.0
+    storage_types: list[str] = []
     for value in storage:
         match = re.search(r"([\d.]+)\s*(GB|TB)", value, re.I)
         if match:
             amount = float(match.group(1)) * (1024 if match.group(2).upper() == "TB" else 1)
             max_gb = max(max_gb, amount)
+        storage_types.append(value.upper())
     if max_gb >= 1000:
-        storage_points = 15
+        capacity_points = 8
     elif max_gb >= 512:
-        storage_points = 13
+        capacity_points = 7
     elif max_gb >= 256:
-        storage_points = 9
+        capacity_points = 6
+    elif max_gb >= 128:
+        capacity_points = 4
     elif max_gb:
-        storage_points = 4
+        capacity_points = 2
     else:
-        storage_points = 6
+        capacity_points = 1
 
-    form_points = 10 if form_factor in {"Tiny", "Micro", "Mini", "USFF", "Desktop Mini"} else (5 if form_factor else 0)
-    gpu_points = 10 if discrete_gpu else (6 if gpu and re.search(r"Radeon\s+(?:680M|780M|890M|880M|760M|660M)", gpu, re.I) else (4 if gpu else 3))
-    return max(0, min(100, cpu_points + ram_points + storage_points + form_points + gpu_points))
+    if any("NVME" in item for item in storage_types):
+        type_points = 3
+    elif any("SSD" in item for item in storage_types):
+        type_points = 2
+    elif any("HDD" in item or "SSHD" in item for item in storage_types):
+        type_points = 1
+    else:
+        type_points = 0
+    multi_drive_points = 2 if len(storage) >= 2 else 0
+    model_points = 2 if model else 0
+    storage_points = min(15, capacity_points + type_points + multi_drive_points + model_points)
 
+    total = cpu_points + price_points + ram_points + storage_points
+    # Not-target listings are filtered by the scanner; keep the score informative
+    # in dry-run output without letting chassis/GPU bonuses distort the ranking.
+    return {
+        "cpu": cpu_points,
+        "price": price_points,
+        "ram": ram_points,
+        "storage_expandability": storage_points,
+        "total": max(0, min(100, total)),
+        "target_system": target_system,
+    }
 
 def _ai_note(gpu: str | None, discrete_gpu: bool, cpu_name: str | None) -> str:
     if discrete_gpu:
@@ -386,7 +576,20 @@ def enrich_item(item: dict[str, Any], session: Any = None, fetch_details: bool =
     description = str(item.get("description") or "").strip()
     if fetch_details and not description:
         description = fetch_listing_description(str(item.get("url") or ""), session=session)
-    analysis = analyze_hardware(str(item.get("title") or ""), description, str(item.get("price") or ""))
+    try:
+        import Config
+        ram_8gb_upgrade_eur = float(getattr(Config, "hardware_ram_8gb_upgrade_eur", DEFAULT_RAM_8GB_UPGRADE_EUR))
+        ram_32gb_kit_eur = float(getattr(Config, "hardware_ram_32gb_kit_eur", DEFAULT_RAM_32GB_KIT_EUR))
+    except (ImportError, TypeError, ValueError):
+        ram_8gb_upgrade_eur = DEFAULT_RAM_8GB_UPGRADE_EUR
+        ram_32gb_kit_eur = DEFAULT_RAM_32GB_KIT_EUR
+    analysis = analyze_hardware(
+        str(item.get("title") or ""),
+        description,
+        str(item.get("price") or ""),
+        ram_8gb_upgrade_eur=ram_8gb_upgrade_eur,
+        ram_32gb_kit_eur=ram_32gb_kit_eur,
+    )
     item["description"] = description
     item["hardware_analysis"] = analysis
     return item
@@ -406,7 +609,22 @@ def build_telegram_lines(item: dict[str, Any], matched_query: str | None = None)
     lines.append("💾 Storage: " + (" + ".join(analysis["storage"]) if analysis.get("storage") else "Not identified"))
     lines.append(f"🎮 GPU: {analysis.get('gpu') or 'Not identified'}")
     lines.append(f"📦 Form factor: {analysis.get('form_factor') or 'Not confirmed'}")
-    lines.append(f"⚙️ Proxmox suitability: {analysis.get('score', 0)}/100 — {analysis.get('verdict')}")
+    lines.append(f"🎯 Target chassis: {'YES — ' + analysis['target_family'] if analysis.get('target_system') else 'NO / NOT CONFIRMED'}")
+    parts = analysis.get("score_parts", {})
+    lines.append(
+        f"📊 Score: {analysis.get('score', 0)}/100 "
+        f"(CPU {parts.get('cpu', 0)}/50 · price {parts.get('price', 0)}/25 · "
+        f"RAM {parts.get('ram', 0)}/10 · storage/expansion {parts.get('storage_expandability', 0)}/15)"
+    )
+    lines.append(f"⚙️ Proxmox suitability: {analysis.get('verdict')}")
+    if analysis.get("total_to_16_eur") is not None:
+        lines.append(f"💶 Total estimate with 16 GB: €{analysis['total_to_16_eur']:.2f} (listing + estimated RAM; shipping/buyer fee excluded)")
+    else:
+        lines.append("💶 Total estimate with 16 GB: to verify RAM configuration")
+    if analysis.get("total_to_32_eur") is not None:
+        lines.append(f"💶 Total estimate with 32 GB: €{analysis['total_to_32_eur']:.2f} (listing + estimated RAM kit; shipping/buyer fee excluded)")
+    else:
+        lines.append("💶 Total estimate with 32 GB: to verify RAM configuration")
     lines.append(f"🤖 AI: {analysis.get('ai_note')}")
     if analysis.get("description"):
         desc = analysis["description"]
