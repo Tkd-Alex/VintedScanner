@@ -169,6 +169,29 @@ class HardwareAnalysisTests(unittest.TestCase):
         self.assertTrue(description.startswith("Processore Intel Core i5-9500T"))
         self.assertEqual(session.get.call_args.kwargs["headers"], headers)
 
+    def test_spare_parts_accessories_and_lots_are_not_target_systems(self):
+        titles = [
+            "Staffa + Antenna Wi-Fi Frontale 00XJ093 Lenovo ThinkCentre M75Q 2.4GHz",
+            "Lot de pièces détachées HP EliteDesk 800 G2 Mini – Ventilateur, dissipateur",
+            "Lot de 5 - Mini PC Lenovo ThinkCentre M710q Tiny - Celeron - 4 Go - HDD",
+            "Alimentatore Lenovo 65W per ThinkCentre Tiny",
+        ]
+        for title in titles:
+            with self.subTest(title=title):
+                analysis = enricher.analyze_hardware(title, "", "20 EUR")
+                self.assertFalse(analysis["target_system"])
+                self.assertTrue(analysis["non_system"])
+                self.assertFalse(enricher.is_target_system(title)[0])
+
+    def test_system_mentioning_accessories_is_still_a_target(self):
+        analysis = enricher.analyze_hardware(
+            "Lenovo ThinkCentre M920q Tiny i5-8500T 16GB con antenna WiFi",
+            "Alimentatore incluso, ventola silenziosa.",
+            "180 EUR",
+        )
+        self.assertTrue(analysis["target_system"])
+        self.assertFalse(analysis["non_system"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -435,7 +435,42 @@ def _cpu_upgrade_estimate(
 
 # Bump whenever target/exclusion rules change, so listings filtered by an older
 # rule set are evaluated again instead of staying hidden forever.
-FILTER_RULES_VERSION = "1"
+FILTER_RULES_VERSION = "2"
+
+# Applied to the listing title only: descriptions of complete systems often
+# mention fans, power adapters or brackets ("alimentatore incluso").
+# Parts and lots are rejected outright.
+PARTS_OR_LOT_TITLE_RE = re.compile(
+    r"\b(?:ricambi(?:o)?|pezzi\s+di\s+ricambio|pi[eè]ces?\s+d[eé]tach[eé]es|"
+    r"spare\s+parts?|for\s+parts|ersatzteile?|repuestos?|"
+    r"lot(?:to)?\s+(?:de|di|of|da)\s+\d+|"
+    r"\d+\s*(?:x|pz|pezzi|pcs|st[uü]ck)\s+(?:mini\s*pc|lenovo|hp|dell|thinkcentre|elitedesk|prodesk|optiplex)|"
+    r"stock\s+(?:di|de|of)\b)",
+    re.I,
+)
+# Component names reject a title only when it names no CPU and no RAM size, so
+# "M920q i5-8500T 16GB con antenna WiFi" is still treated as a system.
+COMPONENT_TITLE_RE = re.compile(
+    r"\b(?:staffa|staffe|antenna|antenne|ventola|ventole|dissipatore|heatsink|"
+    r"scheda\s+madre|motherboard|mainboard|scheda\s+wi-?fi|halterung|l[uü]fter|"
+    r"k[uü]hler|ventilateur|supporto\s+vesa|vesa\s+mount|bracket|caddy|"
+    r"solo\s+case|case\s+vuoto)\b"
+    r"|^\s*(?:alimentatore|caricatore|caricabatterie|adattatore|power\s+supply|"
+    r"charger|chargeur|netzteil|bloc\s+d'alimentation|cavo|c[aâ]ble)\b",
+    re.I,
+)
+SYSTEM_EVIDENCE_RE = re.compile(
+    r"\b(?:i[3579]|celeron|pentium|ryzen|core)\b|\b\d{1,2}\s*(?:gb|go)\b", re.I
+)
+
+
+def is_non_system_title(title: str) -> bool:
+    """Return True for spare parts, accessories and multi-unit lots."""
+    title = title or ""
+    if PARTS_OR_LOT_TITLE_RE.search(title):
+        return True
+    return bool(COMPONENT_TITLE_RE.search(title)) and not SYSTEM_EVIDENCE_RE.search(title)
+
 
 TARGET_FAMILY_RE = re.compile(
     r"\b(?:thinkcentre|elitedesk|prodesk|optiplex)\b|\blenovo\s+m\d{2,4}q?\b", re.I
@@ -462,9 +497,12 @@ def _is_target_system(text: str) -> tuple[bool, str | None]:
             return True, family
     return False, None
 
-def is_target_system(text: str) -> tuple[bool, str | None]:
-    """Public chassis check, used by the scanner before any detail fetch."""
-    return _is_target_system(text or "")
+
+def is_target_system(title: str) -> tuple[bool, str | None]:
+    """Public title-only check, used by the scanner before any detail fetch."""
+    if is_non_system_title(title):
+        return False, None
+    return _is_target_system(title or "")
 
 
 def names_target_family(text: str) -> bool:
@@ -554,6 +592,9 @@ def analyze_hardware(
     storage = _find_storage(text)
     model = _find_model(title) or _find_model(text)
     target_system, target_family = _is_target_system(text)
+    non_system = is_non_system_title(title)
+    if non_system:
+        target_system, target_family = False, None
 
     form_factor = None
     form_patterns = [
@@ -634,7 +675,9 @@ def analyze_hardware(
                 pricing={"effective_price_override": upgrade_total},
             )
             upgrade_score = upgrade_score_parts["total"]
-    if not target_system:
+    if non_system:
+        verdict = "Fuori target: ricambio, accessorio o lotto"
+    elif not target_system:
         verdict = "Fuori target: serve EliteDesk Mini, ThinkCentre Tiny o OptiPlex Micro"
     elif score >= 78:
         verdict = "Candidato interessante"
@@ -649,7 +692,9 @@ def analyze_hardware(
         verdict = "Debole per il tuo obiettivo Proxmox"
 
     missing = []
-    if not target_system:
+    if non_system:
+        missing.append("fuori target: ricambio, accessorio o lotto di più unità")
+    elif not target_system:
         missing.append("fuori target: famiglia/chassis non confermati come Mini/Tiny/Micro richiesto")
     if not cpu_name:
         missing.append("CPU esatta/core da verificare")
@@ -677,6 +722,7 @@ def analyze_hardware(
         "form_factor": form_factor,
         "target_system": target_system,
         "target_family": target_family,
+        "non_system": non_system,
         "score": score,
         "score_parts": score_parts,
         "upgrade_score": upgrade_score,

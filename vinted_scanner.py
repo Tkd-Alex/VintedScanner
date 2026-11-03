@@ -603,10 +603,12 @@ def process_item(
     fetch_details = bool(getattr(Config, "hardware_fetch_details", True))
     if fetch_details and not normalized_item["description"]:
         title_text = f"{normalized_item['title']}"
-        worth_fetching = (
-            not require_target
-            or hardware_enricher.is_target_system(title_text)[0]
-            or hardware_enricher.names_target_family(title_text)
+        worth_fetching = not require_target or (
+            not hardware_enricher.is_non_system_title(title_text)
+            and (
+                hardware_enricher.is_target_system(title_text)[0]
+                or hardware_enricher.names_target_family(title_text)
+            )
         )
         if worth_fetching:
             normalized_item["description"] = fetch_item_description(normalized_item, session)
@@ -620,9 +622,14 @@ def process_item(
             normalized_item["id"], normalized_item["title"],
         )
         if dry_run:
+            reason = (
+                "spare part, accessory or multi-unit lot"
+                if analysis.get("non_system")
+                else "only HP EliteDesk/ProDesk Mini, Lenovo ThinkCentre Tiny "
+                "or Dell OptiPlex Micro are accepted"
+            )
             print(
-                "SKIPPED — outside target: only HP EliteDesk Mini, "
-                "Lenovo ThinkCentre Tiny or Dell OptiPlex Micro are accepted.\n"
+                f"SKIPPED — outside target: {reason}.\n"
                 f"Title: {normalized_item['title']}\n"
                 f"URL: {normalized_item['url']}\n"
             )
