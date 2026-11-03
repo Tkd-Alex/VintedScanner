@@ -485,12 +485,14 @@ def fetch_listing_description(
     headers: dict[str, str] | None = None,
     title: str = "",
     raise_on_rate_limit: bool = False,
+    on_error: Any = None,
 ) -> str:
     """Try to obtain listing text from the item's page; failure is non-fatal.
 
     Uses one bounded, normal page request for a newly detected listing, with the
     same browser-like headers the scanner already uses to open the marketplace.
     It does not use proxies, rotate identities, or try to evade access controls.
+    ``on_error`` is called with the exception when the page cannot be read.
     """
     if not item_url:
         return ""
@@ -538,7 +540,9 @@ def fetch_listing_description(
     except ListingRateLimited:
         raise
     except Exception as error:  # detail enrichment must never stop the base notifier
-        logging.info("Could not fetch listing description (%s): %s", item_url, error)
+        logging.warning("Could not fetch listing description (%s): %s", item_url, error)
+        if on_error is not None:
+            on_error(error)
         return ""
 
 

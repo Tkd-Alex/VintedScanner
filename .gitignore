@@ -122,6 +122,7 @@ vinted_ram_hunt_items.txt
 vinted_filtered_items.txt
 vinted_cpu_hunt_items.txt
 vinted_scanner.log*
+vinted_pending_alerts.json
 
 # Local patch archives
 /*.zip

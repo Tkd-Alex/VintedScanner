@@ -588,3 +588,19 @@ The user found the alerts unreadable: about twenty lines of equal weight under a
 Contract change: line builders now return **already-escaped Telegram HTML**, and `send_telegram_message` no longer escapes `extra_lines` (it still escapes the title, the price, the URLs and the query). Any new line must go through the `message_format` helpers. Dry runs print the same lines with the tags stripped.
 
 Verification: 93 unit tests passed. The example M900 Tiny listing renders as about 1,850 characters, well below Telegram's 4,096 limit. The example alert was then sent to the live Telegram group and accepted (HTTP 200), which confirms the HTML is valid; the photo preview for Vinted `.webp` images was left for the user to check on the phone.
+
+---
+
+## 14. Phase 8 — Run summary and error reporting (3 November 2026)
+
+The user went three to six hours without any Telegram message and could not tell a quiet market from a broken scanner. They asked for every failure to reach Telegram (Vinted HTTP 429, network problems, parsing errors) and for a message even when a run finds nothing.
+
+- A new `run_report` module records, for each run, the searches, listings, new listings, matches and notifications per mode (Mini PC, RAM Hunt, CPU Hunt) and every problem met, grouped by type.
+- Every run ends with one Telegram status message: ✅ when nothing went wrong (including "nothing new matched"), ⚠️ when problems were met, 🔴 when the run could not search at all or crashed. `telegram_run_summary` selects `always` (default), `problems` or `off`.
+- Catalogue errors are classified as rate limit, HTTP error, network error or unexpected response. A catalogue 429 is now retried once after Retry-After and a second one skips the remaining searches, like listing pages already did.
+- Listing-page failures, which were only logged at INFO level, are logged as warnings and reported.
+- An unexpected exception while processing one listing no longer aborts the run: it is reported with the listing ID and title, and the scan continues. Any other crash is caught by `main` and reported.
+- A summary that cannot be delivered is kept in `vinted_pending_alerts.json` and sent as "Delivered late" by the next run that reaches Telegram.
+
+Verification: 110 unit tests passed.
+

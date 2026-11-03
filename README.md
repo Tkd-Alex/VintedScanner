@@ -268,6 +268,27 @@ The M700 Tiny platform reference lists Celeron/Pentium and 6th-gen Core CPUs thr
 
 Telegram limits how fast a bot can post to one chat. The scanner waits `telegram_send_delay_seconds` (default 1 s) after each Telegram message and, if Telegram still answers with HTTP 429, waits the advertised `retry_after` (capped at 30 s) and retries once.
 
+### Run summary and error reporting
+
+Every run ends with a Telegram status message, so a silent chat means the scanner did not run at all. A quiet run reads, for example:
+
+```
+✅ Vinted scan finished · nothing new matched
+• Mini PC (Proxmox): nothing matched · 12 searches, 288 listings, 4 new
+• RAM Hunt: nothing matched · 7 searches, 168 listings, 5 new
+🕒 2026-11-03 14:00 · took 1m 42s
+```
+
+When something goes wrong the headline turns into ⚠️ (problems met, the run went on) or 🔴 (the run could not search at all), followed by one section per problem type with up to three examples:
+
+- 🚦 **Vinted rate limit (HTTP 429)** on a catalogue search or a listing page. A catalogue search is retried once after Vinted's Retry-After hint (default 60 s, at most 120 s); a second 429 skips the remaining searches of that run.
+- ⛔ **Vinted HTTP error** (for example 403) and 🌐 **network errors** (timeouts, DNS or connection failures).
+- 🧾 **Unexpected Vinted responses** (non-JSON pages or a response without the `items` list) and 📄 **listing pages that could not be read**.
+- 🐛 **Listing processing errors**: an unexpected exception while parsing or classifying one listing is reported with the listing ID and title, and the scan continues with the next listing.
+- 📨 **Undelivered alerts**, 💾 **local database errors**, ⚙️ **configuration errors** and 💥 **crashes**.
+
+If Telegram itself cannot be reached (for example while the network is down), the summary is kept in `vinted_pending_alerts.json` and the next run that reaches Telegram first sends a "Delivered late" message with the earlier reports (the ten most recent are kept). Set `telegram_run_summary = "problems"` to be notified only when something went wrong, or `"off"` to disable the summary; it is always written to `vinted_scanner.log`. A dry run prints the summary instead of sending it.
+
 ### Automation with Cron
 
 Before scheduling the scanner, run `python3 vinted_scanner.py --dry-run` once. It records the listings currently online in `vinted_items.txt`, so the first scheduled run only notifies new listings instead of sending dozens of messages at once.

@@ -17,6 +17,14 @@ telegram_chat_id = ""
 # Pause (seconds) after each Telegram message; a 429 rate-limit answer is
 # retried once after Telegram's retry_after hint (capped at 30 s).
 telegram_send_delay_seconds = 1.0
+# End-of-run status message on Telegram, so a silent chat always means the
+# scanner did not run. It lists searches, new listings and matches per mode,
+# plus every problem met: Vinted HTTP 429, network errors, unexpected Vinted
+# responses, listing-processing errors, undelivered alerts and crashes.
+# "always": after every run, also when nothing matched (default)
+# "problems": only when something went wrong
+# "off": never (the summary is still written to vinted_scanner.log)
+telegram_run_summary = "always"
 
 # Vinted URL: change the TLD according to your country (.fr, .es, etc.)
 vinted_url = "https://www.vinted.it"

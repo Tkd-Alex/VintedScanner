@@ -19,9 +19,16 @@ import requests
 import Config
 import hardware_enricher
 import message_format as fmt
+import run_report as report_module
 
 
 PROJECT_DIR = Path(__file__).resolve().parent
+PENDING_ALERTS_PATH = PROJECT_DIR / "vinted_pending_alerts.json"
+MINI_PC_LABEL = "Mini PC (Proxmox)"
+RAM_HUNT_LABEL = "RAM Hunt"
+CPU_HUNT_LABEL = "CPU Hunt"
+# Records searches, matches and problems of the current run; reset by main().
+run_report = report_module.RunReport()
 ITEMS_DATABASE_PATH = PROJECT_DIR / "vinted_items.txt"
 RAM_HUNT_DATABASE_PATH = PROJECT_DIR / "vinted_ram_hunt_items.txt"
 FILTERED_DATABASE_PATH = PROJECT_DIR / "vinted_filtered_items.txt"
@@ -145,6 +152,8 @@ DEFAULT_DETAIL_RATE_LIMIT_WAIT_SECONDS = 60.0
 MAX_DETAIL_RATE_LIMIT_WAIT_SECONDS = 120.0
 # Listing-page fetching pauses for the rest of a run after repeated HTTP 429.
 _detail_fetch_state = {"paused": False}
+# Catalogue searches stop for the rest of a run after repeated HTTP 429.
+_catalog_state = {"paused": False}
 DEFAULT_TELEGRAM_SEND_DELAY_SECONDS = 1.0
 TELEGRAM_DEFAULT_RETRY_SECONDS = 5.0
 TELEGRAM_MAX_RETRY_SECONDS = 30.0
@@ -180,12 +189,19 @@ def fetch_item_description(item, session=None):
     """
     if _detail_fetch_state["paused"]:
         return ""
+
+    def report_page_error(error):
+        run_report.add_issue(
+            "listing_page", f"{item['title']}: {describe_request_error(error)}"
+        )
+
     for attempt in (1, 2):
         wait_before_detail_fetch()
         try:
             return hardware_enricher.fetch_listing_description(
                 item["url"], session=session, headers=build_detail_headers(),
                 title=item["title"], raise_on_rate_limit=True,
+                on_error=report_page_error,
             )
         except hardware_enricher.ListingRateLimited as limited:
             if attempt == 1:
@@ -194,13 +210,45 @@ def fetch_item_description(item, session=None):
                     MAX_DETAIL_RATE_LIMIT_WAIT_SECONDS,
                 )
                 logging.warning("Vinted rate-limited listing pages; retrying in %s s", wait)
+                run_report.add_issue(
+                    "rate_limit", f"Listing page rate-limited; waited {wait:g} s and retried"
+                )
                 time.sleep(wait)
                 continue
             _detail_fetch_state["paused"] = True
             logging.warning(
                 "Vinted still rate-limits listing pages; skipping descriptions for the rest of this run"
             )
+            run_report.add_issue(
+                "rate_limit",
+                "Listing pages still rate-limited after the retry; the rest of this run "
+                "judged listings from their titles only",
+            )
     return ""
+
+
+def request_error_kind(error):
+    """Classify a requests exception as rate_limit, http or network."""
+    response = getattr(error, "response", None)
+    status = getattr(response, "status_code", None)
+    if status == 429:
+        return "rate_limit"
+    if isinstance(status, int):
+        return "http"
+    return "network"
+
+
+def describe_request_error(error):
+    """Return a short, readable description of a request failure."""
+    response = getattr(error, "response", None)
+    status = getattr(response, "status_code", None)
+    if isinstance(status, int):
+        return f"HTTP {status}"
+    if isinstance(error, requests.exceptions.Timeout):
+        return "timed out"
+    if isinstance(error, requests.exceptions.ConnectionError):
+        return "connection failed"
+    return f"{type(error).__name__}: {error}"
 
 
 # CPU Hunt: loose low-power CPUs that can upgrade a cheap i3/Pentium mini PC.
@@ -229,7 +277,16 @@ SAMPLE_CPU_RE = re.compile(
 
 
 class CatalogError(RuntimeError):
-    """Raised when Vinted does not return a valid catalogue response."""
+    """Raised when Vinted does not return a valid catalogue response.
+
+    ``kind`` is a run_report issue kind (rate_limit, http, network or
+    vinted_response); ``retry_after`` is Vinted's hint for HTTP 429, if any.
+    """
+
+    def __init__(self, message, kind="vinted_response", retry_after=None):
+        super().__init__(message)
+        self.kind = kind
+        self.retry_after = retry_after
 
 
 def configure_logging():
@@ -535,12 +592,17 @@ def send_telegram_message(
         {"url": item_image, "prefer_small_media": True, "show_above_text": False}
         if item_image else {"is_disabled": True}
     )
+    return post_telegram_message("\n".join(message_lines), preview)
+
+
+def post_telegram_message(text, preview=None):
+    """Post Telegram HTML text, retrying once on a 429; return whether it was sent."""
     url = f"https://api.telegram.org/bot{Config.telegram_bot_token}/sendMessage"
     params = {
         "chat_id": Config.telegram_chat_id,
-        "text": "\n".join(message_lines),
+        "text": text,
         "parse_mode": "HTML",
-        "link_preview_options": json.dumps(preview),
+        "link_preview_options": json.dumps(preview or {"is_disabled": True}),
     }
     try:
         response = requests.post(
@@ -634,7 +696,15 @@ def get_catalog_items(session, catalog_url, params, api_headers):
         )
         response.raise_for_status()
     except requests.exceptions.RequestException as error:
-        raise CatalogError(f"Vinted catalogue request failed: {error}") from error
+        kind = request_error_kind(error)
+        retry_after = (
+            hardware_enricher._retry_after_seconds(error.response)
+            if kind == "rate_limit" else None
+        )
+        raise CatalogError(
+            f"Vinted catalogue request failed ({describe_request_error(error)}): {error}",
+            kind=kind, retry_after=retry_after,
+        ) from error
 
     try:
         data = response.json()
@@ -657,6 +727,76 @@ def get_catalog_items(session, catalog_url, params, api_headers):
             f"(HTTP {response.status_code}, message: {error_message})"
         )
     return items
+
+
+def fetch_query_items(label, matched_query, session, catalog_url, params, api_headers):
+    """Run one catalogue search for ``label`` and record the outcome.
+
+    Returns the items, or None when the search failed or was skipped. A first
+    HTTP 429 is retried once after Vinted's Retry-After hint (or a default wait);
+    a second one skips the remaining searches of this run.
+    """
+    stats = run_report.mode(label)
+    if _catalog_state["paused"]:
+        stats.skipped_searches += 1
+        return None
+    stats.searches += 1
+    for attempt in (1, 2):
+        try:
+            items = get_catalog_items(session, catalog_url, params, api_headers)
+            break
+        except CatalogError as error:
+            if error.kind == "rate_limit" and attempt == 1:
+                wait = min(
+                    error.retry_after or DEFAULT_DETAIL_RATE_LIMIT_WAIT_SECONDS,
+                    MAX_DETAIL_RATE_LIMIT_WAIT_SECONDS,
+                )
+                logging.warning(
+                    "%s search %r rate-limited; retrying in %s s", label, matched_query, wait
+                )
+                run_report.add_issue(
+                    "rate_limit",
+                    f"{label} search “{matched_query}” rate-limited; waited {wait:g} s and retried",
+                )
+                time.sleep(wait)
+                continue
+            stats.failed_searches += 1
+            logging.error("%s search failed (%s): %s", label, matched_query, error)
+            if error.kind == "rate_limit":
+                _catalog_state["paused"] = True
+                run_report.add_issue(
+                    "rate_limit",
+                    f"{label} search “{matched_query}” still rate-limited after the retry; "
+                    "remaining searches of this run skipped",
+                )
+            else:
+                run_report.add_issue(error.kind, f"{label} search “{matched_query}”: {error}")
+            return None
+    stats.listings += len(items)
+    return items
+
+
+def run_item_safely(label, item, process):
+    """Call ``process()`` for one listing; report unexpected errors instead of crashing.
+
+    Local database errors (OSError) still propagate so the run stops cleanly.
+    """
+    try:
+        return process()
+    except requests.exceptions.RequestException as error:
+        description = describe_request_error(error)
+        kind = request_error_kind(error)
+    except OSError:
+        raise
+    except Exception as error:  # parsing/regex bugs must not hide the rest of the run
+        logging.exception("%s failed to process a listing: %r", label, item)
+        description = f"{type(error).__name__}: {error}"
+        kind = "processing"
+    item_id = item.get("id") if isinstance(item, dict) else None
+    title = item.get("title") if isinstance(item, dict) else None
+    logging.error("%s listing id=%s (%r) failed: %s", label, item_id, title, description)
+    run_report.add_issue(kind, f"{label} listing {item_id} “{title}”: {description}")
+    return False
 
 
 def normalize_item(item):
@@ -724,6 +864,8 @@ def process_item(
         return True
     if filtered_items is not None and normalized_item["id"] in filtered_items:
         return True
+    stats = run_report.mode(MINI_PC_LABEL)
+    stats.new += 1
 
     require_target = bool(getattr(Config, "hardware_require_target_models", True))
     fetch_details = bool(getattr(Config, "hardware_fetch_details", True))
@@ -767,6 +909,7 @@ def process_item(
             filtered_items.add(normalized_item["id"])
         return True
 
+    stats.matches += 1
     extra_lines = hardware_enricher.build_telegram_lines(normalized_item, matched_query)
 
     if dry_run:
@@ -784,8 +927,14 @@ def process_item(
         )
 
     if succeeded:
+        stats.notified += 1
         save_analyzed_item(normalized_item["id"], database_path)
         analyzed_items.add(normalized_item["id"])
+    else:
+        run_report.add_issue(
+            "notification",
+            f"{MINI_PC_LABEL}: “{normalized_item['title']}” (will retry next run)",
+        )
     return succeeded
 
 
@@ -975,6 +1124,8 @@ def process_hunt_item(
     normalized = normalize_item(raw_item)
     if not normalized or normalized["id"] in analyzed_items:
         return True
+    stats = run_report.mode(label)
+    stats.new += 1
 
     # The catalogue often provides only a title. Fetching a detail page is
     # opt-in for hunt modes to keep the added polling load modest.
@@ -997,6 +1148,7 @@ def process_hunt_item(
             print(f"{label.upper()} SKIPPED: {normalized['title']} — outside candidate rules\n")
         return True
 
+    stats.matches += 1
     headline, *extra_lines = build_lines(candidate)
     if dry_run:
         print(fmt.to_plain_text(headline))
@@ -1015,8 +1167,13 @@ def process_hunt_item(
         )
 
     if succeeded:
+        stats.notified += 1
         save_analyzed_item(normalized["id"], database_path)
         analyzed_items.add(normalized["id"])
+    else:
+        run_report.add_issue(
+            "notification", f"{label}: “{normalized['title']}” (will retry next run)"
+        )
     return succeeded
 
 
@@ -1032,7 +1189,7 @@ def process_ram_hunt_item(
     """Independently process a RAM Hunt listing using its own dedupe database."""
     return process_hunt_item(
         raw_item, analyzed_items, dry_run,
-        label="RAM Hunt",
+        label=RAM_HUNT_LABEL,
         classify=lambda item: classify_ram_hunt_candidate(item, max_price_eur),
         build_lines=lambda candidate: ram_hunt_telegram_lines(
             candidate, max_price_eur, matched_query
@@ -1050,11 +1207,11 @@ def process_ram_hunt_queries(
     """Run RAM Hunt queries without applying the main mini-PC chassis filter."""
     processing_failed = False
     for params in queries:
-        matched_query = params.get("search_text") or "RAM Hunt"
-        try:
-            items = get_catalog_items(session, catalog_url, params, api_headers)
-        except CatalogError as error:
-            logging.error("RAM Hunt query failed (%s): %s", matched_query, error)
+        matched_query = params.get("search_text") or RAM_HUNT_LABEL
+        items = fetch_query_items(
+            RAM_HUNT_LABEL, matched_query, session, catalog_url, params, api_headers
+        )
+        if items is None:
             processing_failed = True
             continue
         for item in items:
@@ -1062,10 +1219,10 @@ def process_ram_hunt_queries(
             amount = parse_item_price_amount(item) if isinstance(item, dict) else None
             if amount is None or amount > Decimal(str(max_price_eur)):
                 continue
-            if not process_ram_hunt_item(
+            if not run_item_safely(RAM_HUNT_LABEL, item, lambda item=item: process_ram_hunt_item(
                 item, analyzed_items, dry_run, max_price_eur,
                 matched_query=matched_query, session=session,
-            ):
+            )):
                 processing_failed = True
     return processing_failed
 
@@ -1220,17 +1377,17 @@ def process_cpu_hunt_queries(
     processing_failed = False
     fetch_details = bool(getattr(Config, "cpu_hunt_fetch_details", False))
     for params in queries:
-        matched_query = params.get("search_text") or "CPU Hunt"
-        try:
-            items = get_catalog_items(session, catalog_url, params, api_headers)
-        except CatalogError as error:
-            logging.error("CPU Hunt query failed (%s): %s", matched_query, error)
+        matched_query = params.get("search_text") or CPU_HUNT_LABEL
+        items = fetch_query_items(
+            CPU_HUNT_LABEL, matched_query, session, catalog_url, params, api_headers
+        )
+        if items is None:
             processing_failed = True
             continue
         for item in items:
-            if not process_hunt_item(
+            if not run_item_safely(CPU_HUNT_LABEL, item, lambda item=item: process_hunt_item(
                 item, analyzed_items, dry_run,
-                label="CPU Hunt",
+                label=CPU_HUNT_LABEL,
                 classify=lambda raw: classify_cpu_hunt_candidate(raw, targets),
                 build_lines=lambda candidate, query=matched_query: cpu_hunt_telegram_lines(
                     candidate, query
@@ -1239,7 +1396,7 @@ def process_cpu_hunt_queries(
                 database_path=database_path,
                 matched_query=matched_query,
                 session=session,
-            ):
+            )):
                 processing_failed = True
     return processing_failed
 
@@ -1264,22 +1421,22 @@ def process_queries(
     processing_failed = False
     for params in queries:
         matched_query = params.get("search_text") or "filters only"
-        try:
-            items = get_catalog_items(session, catalog_url, params, api_headers)
-        except CatalogError as error:
-            logging.error("%s", error)
+        items = fetch_query_items(
+            MINI_PC_LABEL, matched_query, session, catalog_url, params, api_headers
+        )
+        if items is None:
             processing_failed = True
             continue
 
         for item in items:
-            if not process_item(
+            if not run_item_safely(MINI_PC_LABEL, item, lambda item=item: process_item(
                 item,
                 analyzed_items,
                 dry_run,
                 matched_query=matched_query,
                 session=session,
                 filtered_items=filtered_items,
-            ):
+            )):
                 processing_failed = True
     return processing_failed
 
@@ -1324,10 +1481,71 @@ def load_configuration(dry_run=False):
     return catalog_url, queries, build_api_headers(Config.vinted_url)
 
 
+def telegram_configured():
+    """Return whether Telegram credentials are available for status messages."""
+    return bool(getattr(Config, "telegram_bot_token", "")) and bool(
+        getattr(Config, "telegram_chat_id", "")
+    )
+
+
+def run_summary_mode():
+    """Return the telegram_run_summary setting: always, problems or off."""
+    value = str(getattr(Config, "telegram_run_summary", "always")).strip().lower()
+    if value not in report_module.SUMMARY_MODES:
+        logging.warning("Unknown telegram_run_summary %r; using 'always'", value)
+        return "always"
+    return value
+
+
+def send_run_summary(dry_run=False):
+    """Send the end-of-run status message, delivering earlier undelivered ones first.
+
+    Messages that cannot be delivered (for example while the network is down)
+    are kept in PENDING_ALERTS_PATH and sent by the next run that reaches Telegram.
+    """
+    message = run_report.build_message(dry_run)
+    logging.info("Run summary:\n%s", fmt.to_plain_text(message))
+    if dry_run:
+        print(fmt.to_plain_text(message))
+        return
+    mode = run_summary_mode()
+    if mode == "off" or (mode == "problems" and not run_report.issues):
+        return
+    if not telegram_configured():
+        logging.warning("Telegram is not configured; the run summary was only logged")
+        return
+
+    pending = report_module.load_pending_messages(PENDING_ALERTS_PATH)
+    if pending and post_telegram_message(report_module.build_late_delivery_message(pending)):
+        pending = []
+        wait_after_telegram_message()
+    if not post_telegram_message(message):
+        pending.append(message)
+    report_module.save_pending_messages(PENDING_ALERTS_PATH, pending)
+
+
 def main(dry_run=False):
-    """Run mini-PC searches and, independently, the optional RAM/CPU Hunt searches."""
+    """Run every search mode, then report the outcome of the run on Telegram."""
+    global run_report
     configure_logging()
+    run_report = report_module.RunReport()
     _detail_fetch_state["paused"] = False
+    _catalog_state["paused"] = False
+    try:
+        exit_code = run_scan(dry_run)
+    except Exception as error:  # report crashes instead of failing silently
+        logging.exception("Vinted scanner crashed")
+        run_report.add_issue("crash", f"{type(error).__name__}: {error}", fatal=True)
+        exit_code = 1
+    try:
+        send_run_summary(dry_run)
+    except Exception:  # the summary must never change the run's exit code
+        logging.exception("Unable to send the run summary")
+    return exit_code
+
+
+def run_scan(dry_run=False):
+    """Run mini-PC searches and, independently, the optional RAM/CPU Hunt searches."""
     try:
         catalog_url, queries, api_headers = load_configuration(dry_run)
         ram_hunt_queries, ram_hunt_max_price = load_ram_hunt_configuration()
@@ -1344,17 +1562,31 @@ def main(dry_run=False):
         message = f"Configuration or local database error: {error}"
         logging.error(message)
         print(message, file=sys.stderr)
+        run_report.add_issue("config", str(error), fatal=True)
         return 2
 
     try:
         session = initialize_vinted_session(Config.vinted_url)
     except requests.exceptions.RequestException as error:
         logging.error("Unable to initialize the Vinted session: %s", error)
+        run_report.add_issue(
+            request_error_kind(error),
+            f"Could not open {Config.vinted_url}: {describe_request_error(error)}; "
+            "no search was run",
+            fatal=True,
+        )
         return 1
 
     anon_id = session.cookies.get("anon_id")
     if anon_id:
         api_headers["X-Anon-Id"] = anon_id
+
+    # Register enabled modes up front so the summary lists them in a stable order.
+    run_report.mode(MINI_PC_LABEL)
+    if ram_hunt_queries:
+        run_report.mode(RAM_HUNT_LABEL)
+    if cpu_hunt_queries:
+        run_report.mode(CPU_HUNT_LABEL)
 
     try:
         # Keep the original mini-PC search behavior and dedupe database intact.
@@ -1376,6 +1608,7 @@ def main(dry_run=False):
             query_failed = query_failed or cpu_hunt_failed
     except OSError as error:
         logging.error("Unable to update the local database: %s", error)
+        run_report.add_issue("local_database", str(error), fatal=True)
         return 1
     return 1 if query_failed else 0
 
