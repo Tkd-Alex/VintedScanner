@@ -54,7 +54,7 @@ class HardwareAnalysisTests(unittest.TestCase):
         self.assertIsNone(result["cpu"])
         self.assertIn("exact CPU/core count to be verified", result["missing"])
 
-    def test_cpu_has_half_of_total_score_and_outweighs_ram_difference(self):
+    def test_cpu_weight_outweighs_ram_difference(self):
         stronger = enricher.analyze_hardware(
             "Lenovo ThinkCentre M920q Tiny i5-8600T 8GB RAM 256GB SSD", price="150 EUR"
         )
@@ -62,9 +62,13 @@ class HardwareAnalysisTests(unittest.TestCase):
             "Lenovo ThinkCentre M910q Tiny i7-7700T 32GB RAM 256GB SSD", price="150 EUR"
         )
         self.assertTrue(stronger["target_system"])
-        self.assertEqual(stronger["score_parts"]["cpu"], 34)
+        self.assertEqual(stronger["score_parts"]["cpu"], 27)
         self.assertGreater(stronger["score_parts"]["cpu"], older["score_parts"]["cpu"])
-        self.assertEqual(sum(stronger["score_parts"][part] for part in ("cpu", "price", "ram", "storage_expandability")), stronger["score"])
+        self.assertGreater(stronger["score"], older["score"])
+        self.assertEqual(
+            sum(stronger["score_parts"][part] for part in ("cpu", "price", "ram", "storage", "platform")),
+            stronger["score"],
+        )
 
     def test_ram_upgrade_costs_use_user_supplied_estimates(self):
         result = enricher.analyze_hardware(
@@ -197,7 +201,7 @@ class HardwareAnalysisTests(unittest.TestCase):
             "Lenovo ThinkCentre M70Q Tiny i5-10400t | 16 GB | 256GB Nvme + 500HDD": "Intel Core i5-10400T",
             "HP ProDesk 400 G4 mini 8500T/256go/8go": "Intel Core i5-8500T",
             "HP EliteDesk 800 G2 Mini, I-5 6500": "Intel Core i5-6500",
-            "Mini PC Lenovo ThinkCentre M910q Tiny | Intel i7-7700 | 16GB RAM": "Intel Core i7-7700",
+            "Mini PC HP EliteDesk 800 G3 Mini | Intel i7-7700 | 16GB RAM": "Intel Core i7-7700",
             "Lenovo ThinkCentre M70q Tiny, i3-10100T": "Intel Core i3-10100T",
             "HP ProDesk 405 G6 Mini PC Ryzen 3 PRO 3200GE 8GB RAM 256GB SSD": "AMD Ryzen 3 PRO 3200GE",
             "Lenovo ThinkCentre M715q Tiny AMD PRO A12-9800E 8GB": "AMD PRO A12-9800E",
@@ -220,6 +224,56 @@ class HardwareAnalysisTests(unittest.TestCase):
         self.assertIn("1.25 TB SSD", result["storage"])
         result = enricher.analyze_hardware("HP ProDesk 400 G4 mini 8500T/256go/8go")
         self.assertEqual(result["ram_gb"], 8)
+
+    def test_vpro_platform_with_vpro_cpu_scores_higher_than_non_vpro_chassis(self):
+        m920q = enricher.analyze_hardware(
+            "Lenovo ThinkCentre M920q Tiny i5-8500T 16GB RAM 256GB NVMe", price="180 EUR"
+        )
+        m720q = enricher.analyze_hardware(
+            "Lenovo ThinkCentre M720q Tiny i5-8500T 16GB RAM 256GB NVMe", price="180 EUR"
+        )
+        self.assertTrue(m920q["remote_management"].startswith("likely"))
+        self.assertTrue(m720q["remote_management"].startswith("no"))
+        self.assertGreater(m920q["score_parts"]["platform"], m720q["score_parts"]["platform"])
+        self.assertTrue(m920q["platform"]["pcie_slot"])
+
+    def test_non_vpro_cpu_on_vpro_chipset_is_reported(self):
+        result = enricher.analyze_hardware("HP EliteDesk 800 G4 Mini i5-8400T 8GB RAM 256GB SSD")
+        self.assertIn("lacks vPro", result["remote_management"])
+
+    def test_legacy_platform_is_warned_and_penalized(self):
+        legacy = enricher.analyze_hardware(
+            "Lenovo ThinkCentre M710q Tiny i5-7500T 16GB RAM 256GB SSD", price="150 EUR"
+        )
+        modern = enricher.analyze_hardware(
+            "Lenovo ThinkCentre M720q Tiny i5-8500T 16GB RAM 256GB SSD", price="150 EUR"
+        )
+        self.assertIn("Legacy platform", legacy["legacy_note"])
+        self.assertIsNone(modern["legacy_note"])
+        self.assertLess(legacy["score_parts"]["platform"], modern["score_parts"]["platform"])
+        lines = enricher.build_telegram_lines({"title": "x", "hardware_analysis": legacy})
+        self.assertTrue(any(line.startswith("⚠️ Legacy platform") for line in lines))
+
+    def test_unknown_cpu_on_known_platform_is_estimated_not_zero(self):
+        result = enricher.analyze_hardware(
+            "Dell OptiPlex 3080 Micro presque neuf – i5 10e génération – 32 Go RAM", price="380 EUR"
+        )
+        self.assertIsNone(result["cpu"])
+        self.assertTrue(result["cpu_estimated"])
+        self.assertGreater(result["score_parts"]["cpu"], 20)
+        celeron = enricher.analyze_hardware(
+            "Lenovo ThinkCentre M700 Tiny Celeron G3900T 4GB RAM", price="60 EUR"
+        )
+        self.assertGreater(result["score"], celeron["score"])
+
+    def test_non_t_cpu_in_35w_chassis_is_read_as_t_variant(self):
+        result = enricher.analyze_hardware(
+            "Dell OptiPlex 7060 Micro Mini PC – i7 8700 / 8GB RAM / 256GB NVMe SSD"
+        )
+        self.assertEqual(result["cpu"], "Intel Core i7-8700T")
+        self.assertIn("35 W chassis", result["cpu_note"])
+        hp = enricher.analyze_hardware("HP EliteDesk 800 G5 Mini i5-9500 16GB RAM")
+        self.assertEqual(hp["cpu"], "Intel Core i5-9500")
 
 
 if __name__ == "__main__":

@@ -20,6 +20,15 @@ DEFAULT_RAM_8GB_UPGRADE_EUR = 50
 DEFAULT_RAM_32GB_KIT_EUR = 130
 PLAUSIBLE_RAM_SIZES_GB = {2, 4, 6, 8, 12, 16, 20, 24, 32, 40, 48, 64}
 
+# Score weights: CPU_PERFORMANCE_POINTS (0-50 tiers) are scaled to 40 points.
+CPU_WEIGHT = 0.8
+# Unknown CPU on a known platform: typical CPU points discounted for uncertainty.
+ESTIMATED_CPU_FACTOR = 0.7
+# Unknown CPU on an unknown platform: neutral, not worse than a Celeron.
+UNKNOWN_CPU_POINTS = 8
+STRONG_CANDIDATE_SCORE = 70
+WORTH_EVALUATING_SCORE = 55
+
 # Relative CPU capability points on the 0-50 portion of the ranking. These are
 # curated tiers for this use case, not benchmark results. Update when the local
 # CPU catalog is extended or better model-specific data becomes available.
@@ -181,6 +190,145 @@ PLATFORM_UPGRADE_PROFILES: list[dict[str, Any]] = [
         "source_url": "https://h30434.www3.hp.com/psg/attachments/psg/Business-PC-Workstation-POS/56278/1/HP%20EliteDesk%20800%20G2%20QuickSpecs%20v31.pdf",
     },
 ]
+
+
+# Intel vPro (AMT) availability per CPU SKU. Parts in neither set are reported
+# as "to verify". AMD parts never provide Intel AMT.
+VPRO_CPU_KEYS = {
+    "i56500", "i56500t", "i56600t", "i57500", "i57500t", "i57600", "i57600t",
+    "i58500", "i58500t", "i58600", "i58600t", "i59500", "i59500t",
+    "i510500", "i510500t", "i511500", "i511500t", "i512500", "i512500t",
+    "i76700", "i76700t", "i77700", "i77700t", "i78700", "i78700t",
+    "i79700", "i79700t", "i710700", "i710700t", "i711700", "i711700t",
+    "i712700", "i712700t",
+}
+NON_VPRO_CPU_KEYS = {
+    "g3900t", "g3930t", "g4400t", "g4500t", "g4560t", "g4600t", "g4900t", "g4930t",
+    "g5400t", "g5420t", "g5500t", "g5600t", "n100",
+    "i36100t", "i37100t", "i38100t", "i39100t", "i310100t",
+    "i56400t", "i57400t", "i58400", "i58400t", "i59400", "i59400t",
+    "i510400", "i510400t",
+}
+
+
+def _platform(
+    pattern: str, name: str, generation: int | None, vpro: str, max_ram_gb: int,
+    pcie_slot: bool | None, max_tdp_w: int | None, typical_cpu: str,
+) -> dict[str, Any]:
+    return {
+        "pattern": re.compile(pattern, re.I), "name": name, "generation": generation,
+        "vpro": vpro, "max_ram_gb": max_ram_gb, "pcie_slot": pcie_slot,
+        "max_tdp_w": max_tdp_w, "typical_cpu": typical_cpu,
+    }
+
+
+# Platform facts for the supported chassis, from Lenovo PSREF, HP QuickSpecs and
+# Dell OptiPlex Micro manuals. "vpro" describes the chipset: "yes" (Q-series,
+# AMT needs a vPro CPU too), "no", "verify" (not confirmed here) or "amd".
+# max_ram_gb is the official maximum; max_tdp_w is the highest CPU class the
+# chassis ships with (35 = T-series only). None means "not confirmed here".
+PLATFORM_PROFILES: list[dict[str, Any]] = [
+    _platform(r"\bM920x\b", "Lenovo ThinkCentre M920x Tiny", 8, "yes", 32, True, 65, "i58500t"),
+    _platform(r"\bM920q?\b", "Lenovo ThinkCentre M920q Tiny", 8, "yes", 32, True, 65, "i58500t"),
+    _platform(r"\bM720q?\b", "Lenovo ThinkCentre M720q Tiny", 8, "no", 32, True, 65, "i58500t"),
+    _platform(r"\bM910[qx]?\b", "Lenovo ThinkCentre M910q Tiny", 7, "yes", 32, False, 35, "i57500t"),
+    _platform(r"\bM710q?\b", "Lenovo ThinkCentre M710q Tiny", 7, "no", 32, False, 35, "i57500t"),
+    _platform(r"\bM900\b", "Lenovo ThinkCentre M900 Tiny", 6, "yes", 32, False, 35, "i56500t"),
+    _platform(r"\bM700\b", "Lenovo ThinkCentre M700 Tiny", 6, "no", 32, False, 35, "i56500t"),
+    _platform(r"\bM90q\b", "Lenovo ThinkCentre M90q Tiny", 10, "yes", 64, None, None, "i510500t"),
+    _platform(r"\bM80q\b", "Lenovo ThinkCentre M80q Tiny", 10, "verify", 64, None, None, "i510500t"),
+    _platform(r"\bM70q\b", "Lenovo ThinkCentre M70q Tiny", 10, "no", 64, None, None, "i510400t"),
+    _platform(r"\bM75q\b", "Lenovo ThinkCentre M75q Tiny", None, "amd", 32, False, 35, "ryzen5pro3400ge"),
+    _platform(r"\bM715q\b", "Lenovo ThinkCentre M715q Tiny", None, "amd", 32, False, 35, "ryzen5pro2400ge"),
+    _platform(r"\bEliteDesk\s+800\s+G2\b", "HP EliteDesk 800 G2 Mini", 6, "yes", 32, False, 65, "i56500t"),
+    _platform(r"\bEliteDesk\s+800\s+G3\b", "HP EliteDesk 800 G3 Mini", 7, "yes", 32, False, 65, "i57500t"),
+    _platform(r"\bEliteDesk\s+800\s+G4\b", "HP EliteDesk 800 G4 Mini", 8, "yes", 32, False, 65, "i58500t"),
+    _platform(r"\bEliteDesk\s+800\s+G5\b", "HP EliteDesk 800 G5 Mini", 9, "yes", 64, False, 65, "i59500t"),
+    _platform(r"\bEliteDesk\s+800\s+G6\b", "HP EliteDesk 800 G6 Mini", 10, "yes", 64, False, 65, "i510500t"),
+    _platform(r"\bEliteDesk\s+705\s+G[45]\b", "HP EliteDesk 705 Mini", None, "amd", 32, False, 35, "ryzen5pro2400ge"),
+    _platform(r"\bProDesk\s+400\s+G3\b", "HP ProDesk 400 G3 Mini", 7, "no", 32, False, 35, "i57500t"),
+    _platform(r"\bProDesk\s+400\s+G4\b", "HP ProDesk 400 G4 Mini", 8, "no", 32, False, 35, "i58500t"),
+    _platform(r"\bProDesk\s+400\s+G5\b", "HP ProDesk 400 G5 Mini", 9, "no", 32, False, 35, "i59500t"),
+    _platform(r"\bProDesk\s+400\s+G6\b", "HP ProDesk 400 G6 Mini", 10, "no", 64, False, 35, "i510500t"),
+    _platform(r"\bProDesk\s+600\s+G2\b", "HP ProDesk 600 G2 Mini", 6, "verify", 32, False, 65, "i56500t"),
+    _platform(r"\bProDesk\s+600\s+G3\b", "HP ProDesk 600 G3 Mini", 7, "verify", 32, False, 65, "i57500t"),
+    _platform(r"\bProDesk\s+600\s+G4\b", "HP ProDesk 600 G4 Mini", 8, "verify", 32, False, 65, "i58500t"),
+    _platform(r"\bProDesk\s+600\s+G5\b", "HP ProDesk 600 G5 Mini", 9, "verify", 64, False, 65, "i59500t"),
+    _platform(r"\bProDesk\s+600\s+G6\b", "HP ProDesk 600 G6 Mini", 10, "verify", 64, False, 65, "i510500t"),
+    _platform(r"\bProDesk\s+405\s+G\d\b", "HP ProDesk 405 Mini", None, "amd", 32, False, 35, "ryzen3pro3200ge"),
+    _platform(r"\bOptiPlex\s+3040\b", "Dell OptiPlex 3040 Micro", 6, "no", 16, False, 35, "i56500t"),
+    _platform(r"\bOptiPlex\s+7040\b", "Dell OptiPlex 7040 Micro", 6, "yes", 32, False, 35, "i56500t"),
+    _platform(r"\bOptiPlex\s+3050\b", "Dell OptiPlex 3050 Micro", 7, "no", 32, False, 35, "i57500t"),
+    _platform(r"\bOptiPlex\s+5050\b", "Dell OptiPlex 5050 Micro", 7, "no", 32, False, 35, "i57500t"),
+    _platform(r"\bOptiPlex\s+7050\b", "Dell OptiPlex 7050 Micro", 7, "yes", 32, False, 35, "i57500t"),
+    _platform(r"\bOptiPlex\s+3060\b", "Dell OptiPlex 3060 Micro", 8, "no", 32, False, 35, "i58500t"),
+    _platform(r"\bOptiPlex\s+5060\b", "Dell OptiPlex 5060 Micro", 8, "verify", 32, False, 35, "i58500t"),
+    _platform(r"\bOptiPlex\s+7060\b", "Dell OptiPlex 7060 Micro", 8, "yes", 32, False, 35, "i58500t"),
+    _platform(r"\bOptiPlex\s+3070\b", "Dell OptiPlex 3070 Micro", 9, "no", 32, False, 35, "i59500t"),
+    _platform(r"\bOptiPlex\s+5070\b", "Dell OptiPlex 5070 Micro", 9, "verify", 64, False, 35, "i59500t"),
+    _platform(r"\bOptiPlex\s+7070\b", "Dell OptiPlex 7070 Micro", 9, "yes", 64, False, 35, "i59500t"),
+    _platform(r"\bOptiPlex\s+3080\b", "Dell OptiPlex 3080 Micro", 10, "no", 64, False, 35, "i510500t"),
+    _platform(r"\bOptiPlex\s+5080\b", "Dell OptiPlex 5080 Micro", 10, "verify", 64, False, 35, "i510500t"),
+    _platform(r"\bOptiPlex\s+7080\b", "Dell OptiPlex 7080 Micro", 10, "yes", 64, False, 35, "i510500t"),
+]
+
+
+# Typical CPU per generation and tier, used only when the exact model is unknown.
+TYPICAL_CPU_BY_GENERATION: dict[int, dict[str, str]] = {
+    6: {"entry": "g4400t", "i3": "i36100t", "i5": "i56500t", "i7": "i76700t"},
+    7: {"entry": "g4560t", "i3": "i37100t", "i5": "i57500t", "i7": "i77700t"},
+    8: {"entry": "g5400t", "i3": "i38100t", "i5": "i58500t", "i7": "i78700t"},
+    9: {"entry": "g5400t", "i3": "i39100t", "i5": "i59500t", "i7": "i79700t"},
+    10: {"entry": "g5600t", "i3": "i310100t", "i5": "i510500t", "i7": "i710700t"},
+}
+CPU_TIER_HINT_RE = re.compile(
+    r"\b(?:core\s*)?i\s*-?\s*([3579])\b|\b(celeron|pentium)\b|\b(?:amd\s+)?pro\s+(a1[02])\b",
+    re.I,
+)
+
+
+def _estimated_cpu_key(platform: dict[str, Any] | None, text: str) -> str | None:
+    """Pick a typical CPU for the platform, honoring an "i3"/"i7"/"Celeron" hint."""
+    if not platform:
+        return None
+    match = CPU_TIER_HINT_RE.search(text or "")
+    generation = platform.get("generation")
+    if match and generation in TYPICAL_CPU_BY_GENERATION:
+        if match.group(1):
+            tier = {"3": "i3", "5": "i5"}.get(match.group(1), "i7")
+        elif match.group(2):
+            tier = "entry"
+        else:
+            tier = "i5"
+        return TYPICAL_CPU_BY_GENERATION[generation][tier]
+    if match and match.group(3):
+        return "a12pro9800e"
+    return platform["typical_cpu"]
+
+
+def _find_platform_profile(text: str) -> dict[str, Any] | None:
+    for profile in PLATFORM_PROFILES:
+        if profile["pattern"].search(text):
+            return profile
+    return None
+
+
+def _vpro_status(platform: dict[str, Any] | None, cpu_key: str | None) -> tuple[str, int]:
+    """Return a remote-management label and its 0-6 score contribution."""
+    if not platform:
+        return "unknown: platform not identified", 0
+    chipset = platform["vpro"]
+    if chipset == "amd":
+        return "no Intel AMT (AMD platform; DASH at most)", 0
+    if chipset == "no":
+        return "no: chipset without vPro/AMT", 0
+    if chipset == "verify":
+        return "to verify for this model", 2
+    if cpu_key in VPRO_CPU_KEYS:
+        return "likely: vPro chipset and vPro CPU (check AMT is enabled in BIOS)", 6
+    if cpu_key in NON_VPRO_CPU_KEYS:
+        return "no: vPro chipset, but this CPU lacks vPro", 1
+    return "possible: vPro chipset, the CPU must be a vPro model", 4
 
 
 def _canonical_cpu(text: str) -> tuple[str | None, dict[str, Any] | None]:
@@ -649,6 +797,18 @@ def analyze_hardware(
     non_system = is_non_system_title(title)
     if non_system:
         target_system, target_family = False, None
+    platform = _find_platform_profile(text) if target_system else None
+
+    cpu_key = _cpu_key_for_name(cpu_name)
+    cpu_note = None
+    if platform and platform["max_tdp_w"] == 35 and cpu and (cpu.get("tdp_w") or 0) > 35:
+        t_key = f"{cpu_key}t"
+        if t_key in CPU_CATALOG:
+            cpu_note = (
+                f"35 W chassis: listed as {cpu_name}, probably the {CPU_CATALOG[t_key]['name']}; verify"
+            )
+            cpu_key, cpu = t_key, CPU_CATALOG[t_key]
+            cpu_name = cpu["name"]
 
     form_factor = None
     form_patterns = [
@@ -703,9 +863,10 @@ def analyze_hardware(
         cpu_name=cpu_name,
         ram_gb=ram_gb,
         storage=storage,
-        model=model,
+        platform=platform,
         target_system=target_system,
         pricing=pricing,
+        estimated_cpu_key=None if cpu_name else _estimated_cpu_key(platform, text),
     )
     score = score_parts["total"]
 
@@ -724,7 +885,7 @@ def analyze_hardware(
                 cpu_name=upgrade_cpu_name,
                 ram_gb=ram_gb,
                 storage=storage,
-                model=model,
+                platform=platform,
                 target_system=target_system,
                 pricing={"effective_price_override": upgrade_total},
             )
@@ -733,9 +894,11 @@ def analyze_hardware(
         verdict = "Out of target: spare part, accessory or lot"
     elif not target_system:
         verdict = "Out of target: requires EliteDesk/ProDesk Mini, ThinkCentre Tiny or OptiPlex Micro"
-    elif score >= 78:
+    elif score >= STRONG_CANDIDATE_SCORE and not (
+        platform and (platform["generation"] or 99) <= 7
+    ):
         verdict = "Strong candidate"
-    elif score >= 58:
+    elif score >= WORTH_EVALUATING_SCORE:
         verdict = "Worth evaluating"
     elif cpu_upgrade.get("needed") and cpu_upgrade.get("candidate_cores"):
         if known_cores is not None and cpu_upgrade["candidate_cores"] > known_cores:
@@ -763,6 +926,26 @@ def analyze_hardware(
     if pricing.get("ram_upgrade_note"):
         missing.append(pricing["ram_upgrade_note"])
 
+    vpro_label, _vpro_points = _vpro_status(platform, cpu_key)
+    platform_info = None
+    legacy_note = None
+    if platform:
+        platform_info = {
+            "name": platform["name"],
+            "generation": platform["generation"],
+            "max_ram_gb": platform["max_ram_gb"],
+            "pcie_slot": platform["pcie_slot"],
+            "max_tdp_w": platform["max_tdp_w"],
+            "vpro": vpro_label,
+        }
+        if platform["generation"] is not None and platform["generation"] <= 7:
+            legacy_note = (
+                f"Legacy platform ({platform['generation']}th gen): max "
+                f"{platform['max_ram_gb']} GB RAM and 4 cores; the CPU upgrade path is informational"
+            )
+    if cpu_note:
+        missing.insert(0, cpu_note)
+
     ai_note = _ai_note(gpu, bool(discrete_match), cpu_name)
     return {
         "model": model,
@@ -777,6 +960,11 @@ def analyze_hardware(
         "target_system": target_system,
         "target_family": target_family,
         "non_system": non_system,
+        "platform": platform_info,
+        "remote_management": vpro_label,
+        "legacy_note": legacy_note,
+        "cpu_note": cpu_note,
+        "cpu_estimated": score_parts.get("cpu_estimated", False),
         "score": score,
         "score_parts": score_parts,
         "upgrade_score": upgrade_score,
@@ -796,16 +984,24 @@ def _score(
     cpu_name: str | None,
     ram_gb: int | None,
     storage: list[str],
-    model: str | None,
+    platform: dict[str, Any] | None,
     target_system: bool,
     pricing: dict[str, Any],
+    estimated_cpu_key: str | None = None,
 ) -> dict[str, Any]:
-    """Return 100 explainable points: CPU 50, price 25, RAM 10, storage 15."""
+    """Return 100 explainable points: CPU 40, price 25, RAM 10, storage 10, platform 15."""
+    cpu_key = _cpu_key_for_name(cpu_name)
+    cpu_estimated = False
     if cpu_name:
-        cpu_key = _cpu_key_for_name(cpu_name)
-        cpu_points = CPU_PERFORMANCE_POINTS.get(cpu_key or "", 8)
+        cpu_points = round(CPU_PERFORMANCE_POINTS.get(cpu_key or "", 10) * CPU_WEIGHT)
+    elif estimated_cpu_key in CPU_PERFORMANCE_POINTS:
+        # Unknown CPU on a known platform: assume a typical part, with a discount.
+        cpu_points = round(
+            CPU_PERFORMANCE_POINTS[estimated_cpu_key] * CPU_WEIGHT * ESTIMATED_CPU_FACTOR
+        )
+        cpu_estimated = True
     else:
-        cpu_points = 0
+        cpu_points = UNKNOWN_CPU_POINTS
 
     if "effective_price_override" in pricing:
         effective_price = pricing.get("effective_price_override")
@@ -854,18 +1050,15 @@ def _score(
             max_gb = max(max_gb, amount)
         storage_types.append(value.upper())
     if max_gb >= 1000:
-        capacity_points = 8
+        capacity_points = 5
     elif max_gb >= 512:
-        capacity_points = 7
-    elif max_gb >= 256:
-        capacity_points = 6
-    elif max_gb >= 128:
         capacity_points = 4
-    elif max_gb:
+    elif max_gb >= 256:
+        capacity_points = 3
+    elif max_gb >= 128:
         capacity_points = 2
     else:
         capacity_points = 1
-
     if any("NVME" in item for item in storage_types):
         type_points = 3
     elif any("SSD" in item for item in storage_types):
@@ -875,20 +1068,34 @@ def _score(
     else:
         type_points = 0
     multi_drive_points = 2 if len(storage) >= 2 else 0
-    model_points = 2 if model else 0
-    storage_points = min(15, capacity_points + type_points + multi_drive_points + model_points)
+    storage_points = min(10, capacity_points + type_points + multi_drive_points)
 
-    total = cpu_points + price_points + ram_points + storage_points
-    # Not-target listings are filtered by the scanner; keep the score informative
-    # in dry-run output without letting chassis/GPU bonuses distort the ranking.
+    _label, vpro_points = _vpro_status(platform, cpu_key)
+    if platform is None:
+        generation_points = 0
+    elif platform["generation"] is None:
+        generation_points = 2
+    elif platform["generation"] >= 8:
+        generation_points = 5
+    else:
+        generation_points = 0
+    pcie_points = 2 if platform and platform["pcie_slot"] else 0
+    cpu_tdp = CPU_CATALOG.get(cpu_key or "", {}).get("tdp_w")
+    low_power_points = 2 if cpu_tdp is not None and cpu_tdp <= 35 else 0
+    platform_points = min(15, vpro_points + generation_points + pcie_points + low_power_points)
+
+    total = cpu_points + price_points + ram_points + storage_points + platform_points
     return {
         "cpu": cpu_points,
+        "cpu_estimated": cpu_estimated,
         "price": price_points,
         "ram": ram_points,
-        "storage_expandability": storage_points,
+        "storage": storage_points,
+        "platform": platform_points,
         "total": max(0, min(100, total)),
         "target_system": target_system,
     }
+
 
 def _ai_note(gpu: str | None, discrete_gpu: bool, cpu_name: str | None) -> str:
     if discrete_gpu:
@@ -945,13 +1152,36 @@ def build_telegram_lines(item: dict[str, Any], matched_query: str | None = None)
     lines = ["", "──────── HARDWARE ANALYSIS ────────"]
     if analysis.get("model"):
         lines.append(f"🖥️ Model: {analysis['model']}")
-    lines.append(f"🧠 CPU: {analysis.get('cpu') or 'Not identified'}")
+    if analysis.get("cpu"):
+        lines.append(f"🧠 CPU: {analysis['cpu']}")
+    elif analysis.get("cpu_estimated") and analysis.get("platform"):
+        lines.append("🧠 CPU: Not identified (score uses a typical CPU for this platform and tier)")
+    else:
+        lines.append("🧠 CPU: Not identified")
     lines.append(f"   {analysis.get('cpu_detail')}")
+    if analysis.get("cpu_note"):
+        lines.append(f"   {analysis['cpu_note']}")
     lines.append(f"🧮 RAM: {analysis['ram_gb']} GB" if analysis.get("ram_gb") is not None else "🧮 RAM: Not identified")
     lines.append("💾 Storage: " + (" + ".join(analysis["storage"]) if analysis.get("storage") else "Not identified"))
     lines.append(f"🎮 GPU: {analysis.get('gpu') or 'Not identified'}")
     lines.append(f"📦 Form factor: {analysis.get('form_factor') or 'Not confirmed'}")
     lines.append(f"🎯 Target chassis: {'YES — ' + analysis['target_family'] if analysis.get('target_system') else 'NO / NOT CONFIRMED'}")
+    platform = analysis.get("platform")
+    if platform:
+        generation = (
+            f"{platform['generation']}th gen Intel" if platform.get("generation") else "AMD"
+        )
+        pcie = {True: "yes", False: "no", None: "to verify"}[platform.get("pcie_slot")]
+        tdp = f"{platform['max_tdp_w']} W" if platform.get("max_tdp_w") else "to verify"
+        lines.append(
+            f"🧬 Platform: {platform['name']} · {generation} · max {platform['max_ram_gb']} GB RAM "
+            f"(official) · PCIe slot: {pcie} · CPU class up to {tdp}"
+        )
+    else:
+        lines.append("🧬 Platform: model not in the local platform table")
+    lines.append(f"🛰️ Remote management (vPro/AMT): {analysis.get('remote_management') or 'unknown'}")
+    if analysis.get("legacy_note"):
+        lines.append(f"⚠️ {analysis['legacy_note']}")
     cpu_upgrade = analysis.get("cpu_upgrade") or {}
     if cpu_upgrade.get("candidate_cpu"):
         candidate_detail = f"{cpu_upgrade['candidate_cores']} core / {cpu_upgrade['candidate_threads']} thread"
@@ -972,8 +1202,9 @@ def build_telegram_lines(item: dict[str, Any], matched_query: str | None = None)
     parts = analysis.get("score_parts", {})
     lines.append(
         f"📊 Current-spec score: {analysis.get('score', 0)}/100 "
-        f"(CPU {parts.get('cpu', 0)}/50 · price {parts.get('price', 0)}/25 · "
-        f"RAM {parts.get('ram', 0)}/10 · storage/expansion {parts.get('storage_expandability', 0)}/15)"
+        f"(CPU {parts.get('cpu', 0)}/40{' est.' if parts.get('cpu_estimated') else ''} · "
+        f"price {parts.get('price', 0)}/25 · RAM {parts.get('ram', 0)}/10 · "
+        f"storage {parts.get('storage', 0)}/10 · platform {parts.get('platform', 0)}/15)"
     )
     if analysis.get("upgrade_score") is not None:
         upgrade_parts = analysis.get("upgrade_score_parts") or {}
