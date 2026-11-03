@@ -41,8 +41,21 @@ class ConfigurationTests(unittest.TestCase):
                 }
             )
 
-    def test_empty_query_list_is_rejected(self):
-        with patch.object(scanner.Config, "queries", []):
+    def test_empty_custom_query_list_uses_default_hardware_discovery_queries(self):
+        with patch.object(scanner.Config, "queries", []), patch.object(
+            scanner.Config, "hardware_add_discovery_queries", True
+        ):
+            _catalog_url, queries, _headers = scanner.load_configuration(dry_run=True)
+        search_terms = {query.get("search_text") for query in queries}
+        self.assertIn("ThinkCentre M700", search_terms)
+        self.assertIn("ThinkCentre M920", search_terms)
+        self.assertIn("EliteDesk Mini", search_terms)
+        self.assertIn("OptiPlex Micro", search_terms)
+
+    def test_discovery_queries_can_be_disabled(self):
+        with patch.object(scanner.Config, "queries", []), patch.object(
+            scanner.Config, "hardware_add_discovery_queries", False
+        ):
             with self.assertRaisesRegex(ValueError, "at least one search"):
                 scanner.load_configuration(dry_run=True)
 
@@ -322,7 +335,7 @@ class ItemProcessingTests(unittest.TestCase):
 
     @patch("vinted_scanner.send_notifications")
     @patch.object(scanner.Config, "hardware_fetch_details", False)
-    def test_non_target_listing_is_skipped_and_recorded(self, send_notifications):
+    def test_non_target_listing_is_skipped_without_poisoning_notified_database(self, send_notifications):
         item = dict(self.item)
         item["id"] = 987
         item["title"] = "GEEKOM A6 Ryzen 7 6800H 32GB RAM 1TB SSD"
@@ -335,9 +348,31 @@ class ItemProcessingTests(unittest.TestCase):
                 item, analyzed_items, dry_run=False, database_path=database_path
             )
             self.assertTrue(succeeded)
-            self.assertEqual(analyzed_items, {"987"})
-            self.assertEqual(database_path.read_text(encoding="utf-8"), "987\n")
+            self.assertEqual(analyzed_items, set())
+            self.assertEqual(database_path.read_text(encoding="utf-8"), "")
             send_notifications.assert_not_called()
+
+    @patch("vinted_scanner.send_notifications", return_value=True)
+    @patch.object(scanner.Config, "hardware_fetch_details", False)
+    def test_m700_usff_candidate_is_not_filtered_and_is_notified(self, send_notifications):
+        item = dict(self.item)
+        item["id"] = 988
+        item["title"] = "Lenovo ThinkCentre M700"
+        item["description"] = "Ultra Small Form Factor (USFF), Celeron G3900T, 4 GB DDR4, HDD 500 GB"
+        item["price"] = {"amount": "49", "currency_code": "EUR"}
+        with tempfile.TemporaryDirectory() as directory:
+            database_path = Path(directory) / "items.txt"
+            database_path.touch()
+            analyzed_items = set()
+            succeeded = scanner.process_item(
+                item, analyzed_items, dry_run=False, database_path=database_path
+            )
+            self.assertTrue(succeeded)
+            self.assertEqual(analyzed_items, {"988"})
+            self.assertEqual(database_path.read_text(encoding="utf-8"), "988\n")
+            send_notifications.assert_called_once()
+            extra_lines = send_notifications.call_args.kwargs["extra_lines"]
+            self.assertTrue(any("i7-6700T" in line for line in extra_lines))
 
 
 class MainTests(unittest.TestCase):

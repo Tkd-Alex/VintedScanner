@@ -80,6 +80,58 @@ class HardwareAnalysisTests(unittest.TestCase):
         self.assertFalse(result["target_system"])
         self.assertIsNone(result["target_family"])
 
+    def test_m700_usff_is_recognized_as_lenovo_tiny_and_has_upgrade_path(self):
+        result = enricher.analyze_hardware(
+            "Lenovo ThinkCentre M700",
+            "Ultra Small Form Factor (USFF), Celeron G3900T, 4 GB DDR4, HDD 500 GB",
+            price="49 EUR",
+            ram_8gb_upgrade_eur=50,
+            cpu_upgrade_costs_eur={"i76700t": 68},
+        )
+        self.assertTrue(result["target_system"])
+        self.assertEqual(result["target_family"], "Lenovo ThinkCentre Tiny (M700 / USFF wording)")
+        self.assertEqual(result["cpu"], "Intel Celeron G3900T")
+        self.assertEqual(result["cores"], 2)
+        self.assertEqual(result["cpu_upgrade"]["candidate_cpu"], "Intel Core i7-6700T")
+        self.assertEqual(result["cpu_upgrade"]["candidate_cores"], 4)
+        self.assertEqual(result["cpu_upgrade"]["candidate_threads"], 8)
+        self.assertEqual(result["total_to_16_with_cpu_eur"], 167)
+        self.assertEqual(result["total_to_32_with_cpu_eur"], 247)
+        self.assertIsNotNone(result["upgrade_score"])
+        self.assertGreater(result["upgrade_score"], result["score"])
+
+    def test_m710q_upgrade_candidate_is_i7_7700t(self):
+        result = enricher.analyze_hardware(
+            "Lenovo ThinkCentre M710q Tiny Celeron G3900T 4GB RAM",
+            price="80 EUR",
+        )
+        self.assertTrue(result["target_system"])
+        self.assertEqual(result["cpu_upgrade"]["candidate_cpu"], "Intel Core i7-7700T")
+        self.assertEqual(result["cpu_upgrade"]["candidate_cores"], 4)
+
+    def test_m720q_upgrade_candidate_has_six_cores(self):
+        result = enricher.analyze_hardware(
+            "Lenovo ThinkCentre M720q Tiny Pentium Gold G5400T 8GB RAM 256GB SSD",
+            price="90 EUR",
+        )
+        self.assertEqual(result["cpu"], "Intel Pentium Gold G5400T")
+        self.assertEqual(result["cpu_upgrade"]["candidate_cpu"], "Intel Core i7-8700T")
+        self.assertEqual(result["cpu_upgrade"]["candidate_cores"], 6)
+        self.assertEqual(result["cpu_upgrade"]["candidate_threads"], 12)
+
+    def test_m700_without_tiny_or_usff_evidence_is_not_accepted(self):
+        result = enricher.analyze_hardware("Lenovo ThinkCentre M700 desktop Celeron G3900T")
+        self.assertFalse(result["target_system"])
+
+    def test_cpu_upgrade_cost_is_not_invented_when_not_configured(self):
+        result = enricher.analyze_hardware(
+            "Lenovo ThinkCentre M700 Tiny Celeron G3900T 4GB RAM",
+            price="49 EUR",
+        )
+        self.assertTrue(result["cpu_upgrade"]["needed"])
+        self.assertIsNone(result["cpu_upgrade"]["cost_eur"])
+        self.assertIsNone(result["total_to_16_with_cpu_eur"])
+
     def test_non_t_variant_i5_9500_is_known(self):
         result = enricher.analyze_hardware("HP EliteDesk 800 G5 Mini i5-9500 16GB RAM 512GB SSD")
         self.assertEqual(result["cpu"], "Intel Core i5-9500")

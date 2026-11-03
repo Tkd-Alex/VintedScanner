@@ -26,14 +26,26 @@ vinted_locale = "it-IT"
 # if the catalogue result does not already include a description. Set False to skip it.
 hardware_fetch_details = True
 
-# Strictly notify only for the target chassis families requested for this search.
+# Notify listings from the supported HP Mini / Lenovo Tiny / Dell Micro chassis families.
 hardware_require_target_models = True
+# Add broad model searches (M700/M710/M720/M920, EliteDesk/ProDesk Mini, OptiPlex Micro)
+# to any custom searches below. Set False to use only your own queries.
+hardware_add_discovery_queries = True
 
-# RAM upgrade estimates used in Telegram alerts (EUR; edit as market prices change).
-# €50 assumes adding a compatible 8 GB module to an existing 8 GB configuration.
-# €130 assumes a full 2x16 GB DDR4 kit for a 32 GB configuration.
+# RAM upgrade planning assumptions (EUR; update when you find better prices).
+# €50: planning allowance for an 8 -> 16 GB upgrade; for a 4 GB base this is
+# only a rough allowance because module topology/kit requirements are unknown.
+# €130: planning allowance for a 2x16 GB DDR4 kit.
 hardware_ram_8gb_upgrade_eur = 50
 hardware_ram_32gb_kit_eur = 130
+
+# Optional CPU price map. Keys are normalized CPU model identifiers.
+# €68 for i7-6700T is based on the Vinted listing observed in Nov 2026
+# (€52.70 displayed incl. protection + €15 shipping); not a market average.
+# Add other CPUs only after checking a real listing and compatibility.
+hardware_cpu_upgrade_costs_eur = {
+    "i76700t": 68,
+}
 
 # Vinted search queries
 # "search_text" may be empty when searching only by filters.

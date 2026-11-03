@@ -238,9 +238,11 @@ python3 vinted_scanner.py -h
 
 ### Telegram Hardware Enrichment and Ranking
 
-This tailored version adds a local hardware analysis to each relevant Telegram alert. The ranking is deliberately weighted for the next Proxmox node: **CPU/platform 50 points, estimated total price 25, RAM 10, storage/expandability 15**. The message displays the score breakdown plus estimated totals with 16 GB and 32 GB RAM.
+This tailored version adds a local hardware analysis to each relevant Telegram alert. It shows a current-spec score weighted **current CPU 50 points, estimated total price 25, RAM 10, storage/expandability 15**, plus a separate upgrade-opportunity score when the model has a documented CPU candidate and its cost is configured. The message displays estimates for 16 GB and 32 GB RAM, with and without the CPU upgrade. Scores are informational and never suppress a matching listing.
 
-By default, strict filtering accepts only **HP EliteDesk Mini, Lenovo ThinkCentre Tiny, and Dell OptiPlex Micro** listings. Generic mini PCs, Geekom models, SFF/USFF variants, and barebones are skipped. Skipped listing IDs are stored too, so fuzzy-search false positives are not reconsidered on every polling cycle. Set `hardware_require_target_models = False` only if you intentionally want to disable this restriction.
+By default, strict filtering accepts **HP EliteDesk/ProDesk Mini, Lenovo ThinkCentre Tiny, and Dell OptiPlex Micro** listings. Generic mini PCs, Geekom models, ordinary SFF desktops, and barebones are skipped. One model-specific exception is Lenovo ThinkCentre M700: Lenovo's PSREF identifies it as a 1L Tiny chassis, so listings that call it `M700 USFF` are accepted when the M700 model and USFF/Tiny wording are both present. Filtered results are not written to the notified-items database, so a later rule change can reconsider them.
+
+The scanner also adds broad model discovery searches by default (M700/M710/M720/M920, ThinkCentre Tiny, EliteDesk/ProDesk Mini and OptiPlex Micro). They are additive to the user's custom searches and can be disabled with `hardware_add_discovery_queries = False`. **Every new listing that passes the chassis filter is notified regardless of its score**; the score is informational only.
 
 Default sample configuration:
 
@@ -250,9 +252,13 @@ hardware_fetch_details = True
 hardware_require_target_models = True
 hardware_ram_8gb_upgrade_eur = 50
 hardware_ram_32gb_kit_eur = 130
+hardware_add_discovery_queries = True
+hardware_cpu_upgrade_costs_eur = {"i76700t": 68}
 ```
 
-The RAM figures are editable assumptions, not live market prices. The €50 estimate assumes adding a compatible 8 GB module to an existing 8 GB setup; €130 assumes a 2×16 GB DDR4 kit. Cost estimates include listing price plus estimated RAM only, **not Vinted buyer-protection fees or shipping**. Missing or unclear RAM configuration stays marked as needing verification. The extra detail request is attempted only for newly detected items and is non-fatal if Vinted does not return the page content. To skip it, set `hardware_fetch_details = False`.
+The RAM figures are editable assumptions, not live market prices. The €50 allowance assumes adding a compatible 8 GB module to an existing 8 GB setup; on a 4 GB base it is only a rough planning budget because the module layout may require replacement or a kit. The €130 figure assumes a 2×16 GB DDR4 kit. CPU upgrade candidates are shown only for model families present in the local reference matrix; the exact MTM, BIOS, power adapter and cooling must still be checked. CPU costs are editable in `hardware_cpu_upgrade_costs_eur`; the sample includes €68 for an i7-6700T based on one observed Vinted offer and is not a market average. Combined build estimates include listing price plus configured component budgets, **not Vinted buyer-protection fees or shipping unless already included in the chosen budget**. Missing or unclear RAM/CPU configuration stays marked for verification. The extra detail request is attempted only for newly detected items and is non-fatal if Vinted does not return the page content. To skip it, set `hardware_fetch_details = False`.
+
+The M700 Tiny platform reference lists Celeron/Pentium and 6th-gen Core CPUs through i7-6700T (4 cores / 8 threads, 32 GB maximum DDR4, two SO-DIMM slots). The M710 Tiny reference lists 6th/7th-gen Core CPUs through i7-7700T (4/8). The M720 Tiny reference lists 8th/9th-gen options including i7-8700T (6/12); the M920q PSREF has an i7-8700T configuration. These references support upgrade candidates, not blanket compatibility for every unit; BIOS and exact machine type still matter.
 
 ### Automation with Cron
 
@@ -335,3 +341,12 @@ When updating an existing installation, merge the RAM Hunt settings from
 If those settings are absent, the code uses the built-in defaults; set
 `ram_hunt_enabled = False` explicitly to turn the feature off.
 
+
+
+### Upgrade references
+
+- [Lenovo ThinkCentre M700 Tiny PSREF](https://psref.lenovo.com/syspool/Sys/PDF/ThinkCentre/ThinkCentre_M700_Tiny/ThinkCentre_M700_Tiny_Spec.PDF)
+- [Lenovo ThinkCentre M710 Tiny PSREF](https://psref.lenovo.com/syspool/Sys/PDF/ThinkCentre/ThinkCentre_M710_Tiny/ThinkCentre_M710_Tiny_Spec.pdf)
+- [Lenovo ThinkCentre M720 Tiny PSREF](https://psref.lenovo.com/syspool/Sys/PDF/ThinkCentre/ThinkCentre_M720_Tiny/ThinkCentre_M720_Tiny_Spec.PDF)
+- [Lenovo ThinkCentre M920 Tiny PSREF configuration](https://psref.lenovo.com/Detail/ThinkCentre/ThinkCentre_M920_Tiny?M=10RS001PUS)
+- [HP EliteDesk 800 G2 QuickSpecs](https://h30434.www3.hp.com/psg/attachments/psg/Business-PC-Workstation-POS/56278/1/HP%20EliteDesk%20800%20G2%20QuickSpecs%20v31.pdf)

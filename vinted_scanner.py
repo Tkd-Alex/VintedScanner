@@ -77,6 +77,14 @@ CATALOG_ORDER_VALUES = {
 
 # RAM Hunt intentionally runs independently of the mini-PC search and its strict
 # chassis filter. The search terms are configurable in Config.py.
+DEFAULT_HARDWARE_DISCOVERY_QUERIES = [
+    {"page": "1", "per_page": "24", "search_text": term, "order": "newest_first", "filters": {}}
+    for term in (
+        "ThinkCentre M700", "ThinkCentre M710", "ThinkCentre M720", "ThinkCentre M920",
+        "ThinkCentre Tiny", "EliteDesk Mini", "ProDesk Mini", "OptiPlex Micro",
+    )
+]
+
 RAM_HUNT_DEFAULT_MAX_PRICE_EUR = 100
 RAM_HUNT_DEFAULT_QUERIES = [
     {"page": "1", "per_page": "24", "search_text": "portatile guasto", "order": "newest_first", "filters": {}, "price_to": "100"},
@@ -547,10 +555,10 @@ def process_item(
                 f"Title: {normalized_item['title']}\n"
                 f"URL: {normalized_item['url']}\n"
             )
-        # Record ignored IDs too, otherwise every polling cycle would rediscover
-        # and re-evaluate the same fuzzy-search false positives.
-        save_analyzed_item(normalized_item["id"], database_path)
-        analyzed_items.add(normalized_item["id"])
+        # Do not persist filtered results in the notification ledger. A future
+        # scanner release may broaden the supported chassis/model rules, and a
+        # listing must then be eligible for re-evaluation rather than being
+        # permanently hidden as "already processed".
         return True
 
     extra_lines = hardware_enricher.build_telegram_lines(normalized_item, matched_query)
@@ -847,9 +855,27 @@ def process_queries(session, catalog_url, queries, api_headers, analyzed_items, 
 def load_configuration(dry_run=False):
     """Validate configuration and return the derived API values."""
     catalog_url = build_catalog_url(Config.vinted_url)
-    if not isinstance(Config.queries, list) or not Config.queries:
+    configured_queries = getattr(Config, "queries", [])
+    if not isinstance(configured_queries, list):
+        raise ValueError("queries must be a list")
+
+    # Add broad chassis/model discovery searches by default. This is additive:
+    # user-configured category/attribute searches are preserved.
+    discovery_enabled = bool(getattr(Config, "hardware_add_discovery_queries", True))
+    raw_queries = list(configured_queries)
+    if discovery_enabled:
+        known = {
+            (str(query.get("search_text", "")).casefold(), str(query.get("order", "newest_first")))
+            for query in raw_queries if isinstance(query, dict)
+        }
+        for query in DEFAULT_HARDWARE_DISCOVERY_QUERIES:
+            key = (query["search_text"].casefold(), query["order"])
+            if key not in known:
+                raw_queries.append(query)
+                known.add(key)
+    if not raw_queries:
         raise ValueError("queries must contain at least one search")
-    queries = [build_catalog_params(query) for query in Config.queries]
+    queries = [build_catalog_params(query) for query in raw_queries]
     validate_notification_config(dry_run)
     return catalog_url, queries, build_api_headers(Config.vinted_url)
 
