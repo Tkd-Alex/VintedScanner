@@ -115,3 +115,11 @@ vinted_items.txt
 
 # Local reverse-engineering artifacts
 APK/
+
+# Custom
+.serena
+vinted_ram_hunt_items.txt
+vinted_scanner.log*
+
+# Local patch archives
+/*.zip
