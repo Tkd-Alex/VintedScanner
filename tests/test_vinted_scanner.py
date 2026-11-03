@@ -622,6 +622,23 @@ class RamHuntTests(unittest.TestCase):
         extra_lines = send_notifications.call_args.kwargs["extra_lines"]
         self.assertTrue(any("RAM HUNT" in line for line in extra_lines))
 
+    def test_ram_hunt_ignores_portable_non_computers_and_storage_sizes(self):
+        lamp = {
+            "id": 9, "title": "Faro Solare LED Portatile Campeggio/Lavoro – non funzionante",
+            "price": {"amount": "4", "currency_code": "EUR"},
+        }
+        chromebook = {
+            "id": 10, "title": "HP Chromebook 11A G6 EE-4GB RAM / 32GB- met oplader.",
+            "price": {"amount": "55", "currency_code": "EUR"},
+        }
+        self.assertIsNone(scanner.classify_ram_hunt_candidate(lamp, 100))
+        self.assertIsNone(scanner.classify_ram_hunt_candidate(chromebook, 100))
+        broken = {
+            "id": 11, "title": "Portatile HP guasto 16GB RAM DDR4 512GB SSD",
+            "price": {"amount": "60", "currency_code": "EUR"},
+        }
+        self.assertIn("16 GB DDR4", scanner.classify_ram_hunt_candidate(broken, 100)["tier"])
+
 
 class CpuHuntTests(unittest.TestCase):
     targets = {key: scanner.Decimal(str(cap)) for key, cap in scanner.CPU_HUNT_DEFAULT_TARGETS.items()}

@@ -341,7 +341,10 @@ donors where RAM capacity is not listed. A listing is not proof that DDR4 SO-DIM
 modules are removable or working. Before buying, verify the exact laptop model, RAM
 form factor/type, number and size of modules, whether they can be removed, and the
 final cost including shipping and marketplace fees. A known 4/8 GB-only listing and
-listings identified as DDR3 are filtered out. The separate database prevents duplicate
+listings identified as DDR3 are filtered out. The RAM size is read with the same parser as
+the hardware analysis, so `4GB RAM / 32GB eMMC` counts as 4 GB. The word `portatile` alone
+is not enough (it also means "portable"): such listings need a computer hint such as a
+brand, CPU, RAM or SSD. The separate database prevents duplicate
 RAM Hunt alerts; ordinary mini-PC notifications keep using `vinted_items.txt`. As with the
 existing scanner, `--dry-run` records analyzed IDs, so listings shown during a dry run will
 not notify again on the next run.

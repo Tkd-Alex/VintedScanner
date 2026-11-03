@@ -114,6 +114,18 @@ LAPTOP_RE = re.compile(
     r"macbook|chromebook|pavilion|precision|zbook|toughbook|swift|satellite|"
     r"xps\s*\d|surface laptop)\b", re.IGNORECASE
 )
+LAPTOP_WORD_RE = re.compile(
+    r"\b(notebook|laptop|computer portatile|pc portatile|thinkpad|latitude|elitebook|"
+    r"probook|ideapad|inspiron|vivobook|zenbook|aspire|travelmate|matebook|"
+    r"macbook|chromebook|pavilion|precision|zbook|toughbook|satellite|"
+    r"xps\s*\d|surface laptop|netbook)\b", re.IGNORECASE
+)
+COMPUTER_HINT_RE = re.compile(
+    r"\b(pc|computer|intel|amd|ryzen|core\s*i[3579]|i[3579]-?\d{3,5}|ram|ssd|hdd|"
+    r"windows|hp|lenovo|dell|asus|acer|msi|toshiba|samsung|apple|huawei|fujitsu|"
+    r"sony|vaio|medion|ddr[34])\b",
+    re.IGNORECASE,
+)
 DAMAGED_RE = re.compile(
     r"\b(guasto|guasta|rotto|rotta|non funzionante|da riparare|non si accende|"
     r"non accende|non parte|non avvia|schermo rotto|display rotto|senza video|"
@@ -842,12 +854,25 @@ def classify_ram_hunt_candidate(item, max_price_eur=RAM_HUNT_DEFAULT_MAX_PRICE_E
     if not LAPTOP_RE.search(text):
         return None
 
+    # "Portatile" alone also means "portable" (lamps, speakers...): require a
+    # computer hint when it is the only laptop word.
+    if not LAPTOP_WORD_RE.search(text) and not COMPUTER_HINT_RE.search(text):
+        return None
+
     damaged = bool(DAMAGED_RE.search(text))
-    has_32 = bool(RAM_32_RE.search(text) or RAM_2X16_RE.search(text))
-    has_16 = bool(RAM_16_RE.search(text))
     has_ddr4 = bool(DDR4_RE.search(text))
     has_ddr3 = bool(DDR3_RE.search(text))
-    has_small_only = bool(RAM_8_OR_LESS_RE.search(text)) and not has_16 and not has_32
+    two_by_16 = bool(RAM_2X16_RE.search(text))
+    # Reuse the hardware parser so "4GB RAM / 32GB eMMC" reads as 4 GB of RAM.
+    ram_gb = hardware_enricher._find_ram_gb(text)
+    if ram_gb is not None:
+        has_32 = ram_gb >= 32 or two_by_16
+        has_16 = 16 <= ram_gb < 32
+        has_small_only = ram_gb < 16 and not two_by_16
+    else:
+        has_32 = bool(RAM_32_RE.search(text) or two_by_16)
+        has_16 = bool(RAM_16_RE.search(text))
+        has_small_only = bool(RAM_8_OR_LESS_RE.search(text)) and not has_16 and not has_32
 
     # Avoid alerts for listings explicitly identified as DDR3: it does not meet
     # the desired DDR4 recovery target. Unknown generation stays a verification item.
