@@ -643,6 +643,13 @@ class CpuHuntTests(unittest.TestCase):
         lines = scanner.cpu_hunt_telegram_lines(candidate, "i7-8700T")
         self.assertTrue(any(line.startswith("Build estimate: €") for line in lines))
 
+    def test_short_bare_cpu_title_is_a_candidate(self):
+        candidate = scanner.classify_cpu_hunt_candidate(self.item("intel i5-9500t", "55"), self.targets)
+        self.assertEqual(candidate["cpu_key"], "i59500t")
+        self.assertIsNone(scanner.classify_cpu_hunt_candidate(
+            self.item("Lenovo ThinkCentre M920q i5-9500T", "55"), self.targets
+        ))
+
     def test_non_candidates_are_rejected(self):
         rejected = [
             self.item("Mini PC Lenovo ThinkCentre M920q CPU i7-8700T 16GB", "85"),

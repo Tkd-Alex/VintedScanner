@@ -371,7 +371,7 @@ Each key is a CPU identifier from `CPU_CATALOG` in `hardware_enricher.py` and ea
 value is the maximum listing price in EUR. One search per target is generated (for
 example `i7-8700T` with `price_to` set to its cap) unless `cpu_hunt_queries` is
 provided. A listing is notified only when its title describes a loose CPU
-(processore, CPU, LGA1151, socket, tray...), the exact target model is parsed (so
+(processore, CPU, LGA1151, socket, tray...) or is a short title naming only the CPU, the exact target model is parsed (so
 non-T, mobile H/U and other models are ignored), it is not a complete system or a
 laptop, it is not an engineering/qualification sample, and the price is within the
 cap.

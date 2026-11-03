@@ -198,6 +198,7 @@ CPU_HUNT_DEFAULT_TARGETS = {
     "i77700t": 55, "i76700t": 50,
 }
 CPU_HUNT_DEFAULT_BASE_PRICE_EUR = 90
+BARE_CPU_TITLE_MAX_CHARS = 40
 LOOSE_CPU_TITLE_RE = re.compile(
     r"\b(?:processore|processori|processor|prozessor|processeur|procesador|cpu|"
     r"lga\s*-?\s*1151|socket|tray)\b",
@@ -1071,7 +1072,9 @@ def cpu_search_text(cpu_key):
 def classify_cpu_hunt_candidate(item, targets):
     """Classify a listing as a loose target CPU under its price cap.
 
-    Returns None for complete systems, laptops, other CPU models (including
+    The title must describe a loose part (processore, CPU, LGA1151...) or be a
+    short title naming only the CPU. Returns None for complete systems,
+    laptops, other CPU models (including
     non-T, mobile H/U parts), engineering/qualification samples and prices
     above the target's cap.
     """
@@ -1082,7 +1085,8 @@ def classify_cpu_hunt_candidate(item, targets):
         return None
     title = str(item.get("title") or "")
     description = str(item.get("description") or "")
-    if not LOOSE_CPU_TITLE_RE.search(title):
+    # Short titles such as "intel i5-9500t" usually describe the bare part.
+    if not LOOSE_CPU_TITLE_RE.search(title) and len(title.strip()) > BARE_CPU_TITLE_MAX_CHARS:
         return None
     if LAPTOP_RE.search(title) or WHOLE_SYSTEM_TITLE_RE.search(title):
         return None
