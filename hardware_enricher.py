@@ -433,6 +433,15 @@ def _cpu_upgrade_estimate(
     }
 
 
+# Bump whenever target/exclusion rules change, so listings filtered by an older
+# rule set are evaluated again instead of staying hidden forever.
+FILTER_RULES_VERSION = "1"
+
+TARGET_FAMILY_RE = re.compile(
+    r"\b(?:thinkcentre|elitedesk|prodesk|optiplex)\b|\blenovo\s+m\d{2,4}q?\b", re.I
+)
+
+
 def _is_target_system(text: str) -> tuple[bool, str | None]:
     """Accept the requested HP Mini, Lenovo Tiny and Dell Micro chassis.
 
@@ -452,6 +461,20 @@ def _is_target_system(text: str) -> tuple[bool, str | None]:
         if re.search(pattern, text, re.I):
             return True, family
     return False, None
+
+def is_target_system(text: str) -> tuple[bool, str | None]:
+    """Public chassis check, used by the scanner before any detail fetch."""
+    return _is_target_system(text or "")
+
+
+def names_target_family(text: str) -> bool:
+    """Return True when text names a supported family without proving the chassis.
+
+    Such listings (e.g. "Lenovo ThinkCentre M700" or "HP EliteDesk 800 G3")
+    may confirm the Tiny/Mini/Micro form factor only in the description.
+    """
+    return bool(TARGET_FAMILY_RE.search(text or ""))
+
 
 def _parse_price_eur(price: str | None) -> float | None:
     """Read a simple EUR amount from normalized Vinted price text."""

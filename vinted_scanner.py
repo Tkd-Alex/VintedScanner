@@ -24,6 +24,7 @@ import hardware_enricher
 PROJECT_DIR = Path(__file__).resolve().parent
 ITEMS_DATABASE_PATH = PROJECT_DIR / "vinted_items.txt"
 RAM_HUNT_DATABASE_PATH = PROJECT_DIR / "vinted_ram_hunt_items.txt"
+FILTERED_DATABASE_PATH = PROJECT_DIR / "vinted_filtered_items.txt"
 LOG_PATH = PROJECT_DIR / "vinted_scanner.log"
 REQUEST_TIMEOUT_SECONDS = 30
 
@@ -341,6 +342,29 @@ def save_analyzed_item(item_id, database_path=ITEMS_DATABASE_PATH):
         database.write(f"{item_id}\n")
 
 
+def load_filtered_items(database_path=FILTERED_DATABASE_PATH):
+    """Load IDs filtered out under the current rule version.
+
+    Entries are stored as "<rules version>:<item id>". Entries written by an
+    older rule set are dropped so those listings get evaluated again.
+    """
+    database_path.touch(exist_ok=True)
+    prefix = f"{hardware_enricher.FILTER_RULES_VERSION}:"
+    with database_path.open("r", encoding="utf-8", errors="ignore") as database:
+        lines = [line.strip() for line in database if line.strip()]
+    current = [line for line in lines if line.startswith(prefix)]
+    if len(current) != len(lines):
+        database_path.write_text(
+            "".join(f"{line}\n" for line in current), encoding="utf-8"
+        )
+    return {line[len(prefix):] for line in current}
+
+
+def save_filtered_item(item_id, database_path=FILTERED_DATABASE_PATH):
+    """Record an item rejected by the current target rules."""
+    save_analyzed_item(f"{hardware_enricher.FILTER_RULES_VERSION}:{item_id}", database_path)
+
+
 def send_email(item_title, item_price, item_url, item_image, matched_query=None):
     """Send an email notification and report whether it succeeded."""
     try:
@@ -565,20 +589,31 @@ def process_item(
     database_path=ITEMS_DATABASE_PATH,
     matched_query=None,
     session=None,
+    filtered_items=None,
+    filtered_database_path=FILTERED_DATABASE_PATH,
 ):
     """Process one item and persist it only after the requested action succeeds."""
     normalized_item = normalize_item(item)
     if not normalized_item or normalized_item["id"] in analyzed_items:
         return True
+    if filtered_items is not None and normalized_item["id"] in filtered_items:
+        return True
 
+    require_target = bool(getattr(Config, "hardware_require_target_models", True))
     fetch_details = bool(getattr(Config, "hardware_fetch_details", True))
     if fetch_details and not normalized_item["description"]:
-        normalized_item["description"] = fetch_item_description(normalized_item, session)
+        title_text = f"{normalized_item['title']}"
+        worth_fetching = (
+            not require_target
+            or hardware_enricher.is_target_system(title_text)[0]
+            or hardware_enricher.names_target_family(title_text)
+        )
+        if worth_fetching:
+            normalized_item["description"] = fetch_item_description(normalized_item, session)
     normalized_item = hardware_enricher.enrich_item(
         normalized_item, session=session, fetch_details=False
     )
     analysis = normalized_item.get("hardware_analysis") or {}
-    require_target = bool(getattr(Config, "hardware_require_target_models", True))
     if require_target and not analysis.get("target_system", False):
         logging.info(
             "Ignoring item outside target mini-PC families (id=%s, title=%r)",
@@ -591,10 +626,12 @@ def process_item(
                 f"Title: {normalized_item['title']}\n"
                 f"URL: {normalized_item['url']}\n"
             )
-        # Do not persist filtered results in the notification ledger. A future
-        # scanner release may broaden the supported chassis/model rules, and a
-        # listing must then be eligible for re-evaluation rather than being
-        # permanently hidden as "already processed".
+        # Keep filtered results out of the notification ledger. They go to a
+        # separate ledger tagged with the rule version, so they are not fetched
+        # again on every run but are re-evaluated after a rule change.
+        if filtered_items is not None:
+            save_filtered_item(normalized_item["id"], filtered_database_path)
+            filtered_items.add(normalized_item["id"])
         return True
 
     extra_lines = hardware_enricher.build_telegram_lines(normalized_item, matched_query)
@@ -862,7 +899,10 @@ def initialize_vinted_session(marketplace_url):
     return session
 
 
-def process_queries(session, catalog_url, queries, api_headers, analyzed_items, dry_run):
+def process_queries(
+    session, catalog_url, queries, api_headers, analyzed_items, dry_run,
+    filtered_items=None,
+):
     """Process every configured query and report whether any query failed."""
     processing_failed = False
     for params in queries:
@@ -881,6 +921,7 @@ def process_queries(session, catalog_url, queries, api_headers, analyzed_items, 
                 dry_run,
                 matched_query=matched_query,
                 session=session,
+                filtered_items=filtered_items,
             ):
                 processing_failed = True
     return processing_failed
@@ -921,6 +962,7 @@ def main(dry_run=False):
         catalog_url, queries, api_headers = load_configuration(dry_run)
         ram_hunt_queries, ram_hunt_max_price = load_ram_hunt_configuration()
         analyzed_items = load_analyzed_items()
+        filtered_items = load_filtered_items()
         ram_hunt_items = (
             load_analyzed_items(RAM_HUNT_DATABASE_PATH) if ram_hunt_queries else set()
         )
@@ -943,7 +985,8 @@ def main(dry_run=False):
     try:
         # Keep the original mini-PC search behavior and dedupe database intact.
         query_failed = process_queries(
-            session, catalog_url, queries, api_headers, analyzed_items, dry_run
+            session, catalog_url, queries, api_headers, analyzed_items, dry_run,
+            filtered_items=filtered_items,
         )
         if ram_hunt_queries:
             ram_hunt_failed = process_ram_hunt_queries(

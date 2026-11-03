@@ -398,10 +398,58 @@ class ItemProcessingTests(unittest.TestCase):
         self.assertTrue(headers["Referer"].startswith("https://"))
         sleep.assert_called_once_with(0.5)
 
+    @patch("vinted_scanner.fetch_item_description", return_value="")
+    @patch("vinted_scanner.send_notifications")
+    @patch.object(scanner.Config, "hardware_fetch_details", True)
+    def test_filtered_listing_goes_to_versioned_ledger_and_is_not_fetched(
+        self, send_notifications, fetch_description
+    ):
+        item = dict(self.item)
+        item["id"] = 990
+        item["title"] = "GEEKOM A6 Ryzen 7 6800H 32GB RAM 1TB SSD"
+        item["description"] = ""
+        with tempfile.TemporaryDirectory() as directory:
+            notified_path = Path(directory) / "items.txt"
+            filtered_path = Path(directory) / "filtered.txt"
+            filtered = scanner.load_filtered_items(filtered_path)
+            for _ in range(2):
+                scanner.process_item(
+                    item, set(), dry_run=False, database_path=notified_path,
+                    filtered_items=filtered, filtered_database_path=filtered_path,
+                )
+            self.assertEqual(notified_path.read_text(encoding="utf-8") if notified_path.exists() else "", "")
+            version = scanner.hardware_enricher.FILTER_RULES_VERSION
+            self.assertEqual(filtered_path.read_text(encoding="utf-8"), f"{version}:990\n")
+            fetch_description.assert_not_called()
+            send_notifications.assert_not_called()
+
+            with patch.object(scanner.hardware_enricher, "FILTER_RULES_VERSION", version + "-next"):
+                self.assertEqual(scanner.load_filtered_items(filtered_path), set())
+            self.assertEqual(filtered_path.read_text(encoding="utf-8"), "")
+
+    @patch("vinted_scanner.fetch_item_description", return_value="Tiny chassis, i5-6500T, 8GB RAM")
+    @patch("vinted_scanner.send_notifications", return_value=True)
+    @patch.object(scanner.Config, "hardware_fetch_details", True)
+    def test_family_title_without_form_factor_still_fetches_description(
+        self, send_notifications, fetch_description
+    ):
+        item = dict(self.item)
+        item["id"] = 991
+        item["title"] = "Lenovo ThinkCentre M700"
+        item["description"] = ""
+        with tempfile.TemporaryDirectory() as directory:
+            scanner.process_item(
+                item, set(), dry_run=False, database_path=Path(directory) / "items.txt",
+                filtered_items=set(), filtered_database_path=Path(directory) / "f.txt",
+            )
+        fetch_description.assert_called_once()
+        send_notifications.assert_called_once()
+
 
 class MainTests(unittest.TestCase):
     @patch("vinted_scanner.process_queries", return_value=True)
     @patch("vinted_scanner.initialize_vinted_session")
+    @patch("vinted_scanner.load_filtered_items", return_value=set())
     @patch("vinted_scanner.load_analyzed_items", return_value=set())
     @patch("vinted_scanner.load_configuration")
     @patch("vinted_scanner.configure_logging")
@@ -410,6 +458,7 @@ class MainTests(unittest.TestCase):
         configure_logging,
         load_configuration,
         load_analyzed_items,
+        load_filtered_items,
         initialize_session,
         process_queries,
     ):

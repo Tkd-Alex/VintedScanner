@@ -119,6 +119,7 @@ APK/
 # Custom
 .serena
 vinted_ram_hunt_items.txt
+vinted_filtered_items.txt
 vinted_scanner.log*
 
 # Local patch archives
