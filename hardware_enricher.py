@@ -18,6 +18,7 @@ REQUEST_TIMEOUT_SECONDS = 15
 MAX_DESCRIPTION_CHARS = 520
 DEFAULT_RAM_8GB_UPGRADE_EUR = 50
 DEFAULT_RAM_32GB_KIT_EUR = 130
+PLAUSIBLE_RAM_SIZES_GB = {2, 4, 6, 8, 12, 16, 20, 24, 32, 40, 48, 64}
 
 # Relative CPU capability points on the 0-50 portion of the ranking. These are
 # curated tiers for this use case, not benchmark results. Update when the local
@@ -26,7 +27,13 @@ CPU_PERFORMANCE_POINTS: dict[str, int] = {
     "g3900t": 2, "g3930t": 2, "g4400t": 3, "g4500t": 3,
     "g4560t": 4, "g4600t": 4, "g4900t": 3, "g4930t": 3,
     "g5400t": 5, "g5420t": 5, "g5500t": 5, "g5600t": 5,
-    "i56500t": 19, "i57500": 23, "i57500t": 22,
+    "i36100t": 9, "i37100t": 11, "i38100t": 17, "i39100t": 18, "i310100t": 22,
+    "i56400t": 17, "i56500": 21, "i56500t": 19, "i56600t": 21,
+    "i57400t": 20, "i57500": 23, "i57500t": 22, "i57600": 26, "i57600t": 23,
+    "i58400": 33, "i58600": 36, "i59400": 35, "i59400t": 31, "i59600t": 36,
+    "i510400t": 36, "i510600t": 40, "i76700": 27, "i77700": 30,
+    "ryzen3pro3200ge": 19, "ryzen5pro3400ge": 25,
+    "a10pro9700e": 8, "a12pro9800e": 9,
     "i58400t": 30, "i58500": 34, "i58500t": 32, "i58600t": 34,
     "i76700t": 24, "i77700t": 27, "i78700t": 39, "i78700": 43,
     "i59500": 37, "i59500t": 35, "i79700": 47, "i79700t": 44,
@@ -87,6 +94,28 @@ CPU_CATALOG: dict[str, dict[str, Any]] = {
     "i512500t": {"name": "Intel Core i5-12500T", "cores": 6, "threads": 12, "tdp_w": 35, "gpu": "Intel UHD Graphics 770"},
     "i712700": {"name": "Intel Core i7-12700", "cores": 12, "threads": 20, "tdp_w": 65, "gpu": "Intel UHD Graphics 770"},
     "i712700t": {"name": "Intel Core i7-12700T", "cores": 12, "threads": 20, "tdp_w": 35, "gpu": "Intel UHD Graphics 770"},
+    "i36100t": {"name": "Intel Core i3-6100T", "cores": 2, "threads": 4, "tdp_w": 35, "gpu": "Intel HD Graphics 530"},
+    "i37100t": {"name": "Intel Core i3-7100T", "cores": 2, "threads": 4, "tdp_w": 35, "gpu": "Intel HD Graphics 630"},
+    "i38100t": {"name": "Intel Core i3-8100T", "cores": 4, "threads": 4, "tdp_w": 35, "gpu": "Intel UHD Graphics 630"},
+    "i39100t": {"name": "Intel Core i3-9100T", "cores": 4, "threads": 4, "tdp_w": 35, "gpu": "Intel UHD Graphics 630"},
+    "i310100t": {"name": "Intel Core i3-10100T", "cores": 4, "threads": 8, "tdp_w": 35, "gpu": "Intel UHD Graphics 630"},
+    "i56500": {"name": "Intel Core i5-6500", "cores": 4, "threads": 4, "tdp_w": 65, "gpu": "Intel HD Graphics 530"},
+    "i57400t": {"name": "Intel Core i5-7400T", "cores": 4, "threads": 4, "tdp_w": 35, "gpu": "Intel HD Graphics 630"},
+    "i57600": {"name": "Intel Core i5-7600", "cores": 4, "threads": 4, "tdp_w": 65, "gpu": "Intel HD Graphics 630"},
+    "i57600t": {"name": "Intel Core i5-7600T", "cores": 4, "threads": 4, "tdp_w": 35, "gpu": "Intel HD Graphics 630"},
+    "i58400": {"name": "Intel Core i5-8400", "cores": 6, "threads": 6, "tdp_w": 65, "gpu": "Intel UHD Graphics 630"},
+    "i58600": {"name": "Intel Core i5-8600", "cores": 6, "threads": 6, "tdp_w": 65, "gpu": "Intel UHD Graphics 630"},
+    "i59400": {"name": "Intel Core i5-9400", "cores": 6, "threads": 6, "tdp_w": 65, "gpu": "Intel UHD Graphics 630"},
+    "i59400t": {"name": "Intel Core i5-9400T", "cores": 6, "threads": 6, "tdp_w": 35, "gpu": "Intel UHD Graphics 630"},
+    "i59600t": {"name": "Intel Core i5-9600T", "cores": 6, "threads": 6, "tdp_w": 35, "gpu": "Intel UHD Graphics 630"},
+    "i510400t": {"name": "Intel Core i5-10400T", "cores": 6, "threads": 12, "tdp_w": 35, "gpu": "Intel UHD Graphics 630"},
+    "i510600t": {"name": "Intel Core i5-10600T", "cores": 6, "threads": 12, "tdp_w": 35, "gpu": "Intel UHD Graphics 630"},
+    "i76700": {"name": "Intel Core i7-6700", "cores": 4, "threads": 8, "tdp_w": 65, "gpu": "Intel HD Graphics 530"},
+    "i77700": {"name": "Intel Core i7-7700", "cores": 4, "threads": 8, "tdp_w": 65, "gpu": "Intel HD Graphics 630"},
+    "ryzen3pro3200ge": {"name": "AMD Ryzen 3 PRO 3200GE", "cores": 4, "threads": 4, "tdp_w": 35, "gpu": "Radeon Vega 8 Graphics"},
+    "ryzen5pro3400ge": {"name": "AMD Ryzen 5 PRO 3400GE", "cores": 4, "threads": 8, "tdp_w": 35, "gpu": "Radeon Vega 11 Graphics"},
+    "a10pro9700e": {"name": "AMD PRO A10-9700E", "cores": 4, "threads": 4, "tdp_w": 35, "gpu": "Radeon R7 Graphics"},
+    "a12pro9800e": {"name": "AMD PRO A12-9800E", "cores": 4, "threads": 4, "tdp_w": 35, "gpu": "Radeon R7 Graphics"},
     "n100": {"name": "Intel Processor N100", "cores": 4, "threads": 4, "tdp_w": 6, "gpu": "Intel UHD Graphics (Alder Lake-N)"},
     "ryzen3pro2200ge": {"name": "AMD Ryzen 3 PRO 2200GE", "cores": 4, "threads": 4, "tdp_w": 35, "gpu": "Radeon Vega 8 Graphics"},
     "ryzen5pro2400ge": {"name": "AMD Ryzen 5 PRO 2400GE", "cores": 4, "threads": 8, "tdp_w": 35, "gpu": "Radeon Vega 11 Graphics"},
@@ -99,7 +128,12 @@ CPU_CATALOG: dict[str, dict[str, Any]] = {
 }
 
 # Parse longer / exact models first, so e.g. i5-7500T cannot be reduced to i5-7500.
-INTEL_CPU_RE = re.compile(r"\b(?:intel\s*)?(?:core\s*)?(i[3579])\s*[- ]?\s*(\d{4,5})([a-z]{0,2})\b", re.I)
+INTEL_CPU_RE = re.compile(
+    r"\b(?:intel\s*)?(?:core\s*)?i\s*-?\s*([3579])\s*[- ]?\s*(\d{4,5})([a-z]{0,2})\b", re.I
+)
+# Sellers often write only the number of a low-power part: "8500T/256go/8go".
+BARE_T_CPU_RE = re.compile(r"(?<![\w-])(\d{4,5})t\b", re.I)
+AMD_A_SERIES_RE = re.compile(r"\b(?:amd\s*)?(?:pro\s*)?a(10|12)\s*-?\s*(9[78]00e)\b", re.I)
 AMD_CPU_RE = re.compile(r"\bryzen\s*([3579])\s*(pro\s*)?(\d{4,5}[a-z]{0,2})\b", re.I)
 N100_RE = re.compile(r"\b(?:intel\s+processor\s+)?n100\b", re.I)
 ENTRY_LEVEL_CPU_RE = re.compile(
@@ -155,7 +189,7 @@ def _canonical_cpu(text: str) -> tuple[str | None, dict[str, Any] | None]:
         return "Intel Processor N100", CPU_CATALOG["n100"]
 
     for match in INTEL_CPU_RE.finditer(text):
-        key = (match.group(1) + match.group(2) + (match.group(3) or "")).lower()
+        key = ("i" + match.group(1) + match.group(2) + (match.group(3) or "")).lower()
         # A suffixless model is not the same SKU as its low-power T version.
         if key in CPU_CATALOG:
             return CPU_CATALOG[key]["name"], CPU_CATALOG[key]
@@ -170,6 +204,18 @@ def _canonical_cpu(text: str) -> tuple[str | None, dict[str, Any] | None]:
         key = re.sub(r"[^a-z0-9]", "", match.group(1).lower())
         if key in CPU_CATALOG:
             return CPU_CATALOG[key]["name"], CPU_CATALOG[key]
+
+    for match in AMD_A_SERIES_RE.finditer(text):
+        key = f"a{match.group(1)}pro{match.group(2).lower()}"
+        if key in CPU_CATALOG:
+            return CPU_CATALOG[key]["name"], CPU_CATALOG[key]
+
+    for match in BARE_T_CPU_RE.finditer(text):
+        number = match.group(1)
+        keys = [f"i{tier}{number}t" for tier in "3579" if f"i{tier}{number}t" in CPU_CATALOG]
+        # Accept the bare number only when it maps to exactly one Core model.
+        if len(keys) == 1:
+            return CPU_CATALOG[keys[0]]["name"], CPU_CATALOG[keys[0]]
 
     return None, None
 
@@ -295,24 +341,27 @@ def fetch_listing_description(
 def _find_ram_gb(text: str) -> int | None:
     # Prefer number-first phrasing: "16GB RAM". Do this before "RAM 512GB"
     # because in "16GB RAM 512GB NVMe" the latter sequence would misread SSD size as RAM.
-    explicit_after = re.search(r"\b(\d{1,3})\s*gb\s*(?:ddr[345]\s*)?(?:ram|memory|di ram)\b", text, re.I)
+    explicit_after = re.search(r"\b(\d{1,3})\s*(?:gb|go)\s*(?:ddr[345]\s*)?(?:ram|memory|di ram|de ram)\b", text, re.I)
     if explicit_after:
         return int(explicit_after.group(1))
-    explicit = re.search(r"\b(?:ram|memory|memoria)\s*[:=]\s*(\d{1,3})\s*gb\b", text, re.I)
+    explicit = re.search(r"\b(?:ram|memory|memoria|m[eé]moire)\s*[:=]\s*(\d{1,3})\s*(?:gb|go)\b", text, re.I)
     if explicit:
         return int(explicit.group(1))
-    explicit = re.search(r"\b(?:ram|memory|memoria)\s+(\d{1,3})\s*gb\b", text, re.I)
+    explicit = re.search(r"\b(?:ram|memory|memoria|m[eé]moire)\s+(\d{1,3})\s*(?:gb|go)\b", text, re.I)
     if explicit:
         return int(explicit.group(1))
 
     # Common resale title pattern: "i5-8600T | 16GB | 256GB SSD". Treat as
     # RAM the first capacity that is not attached to an explicit storage label.
     storage_spans = [m.span() for m in re.finditer(
-        r"\b\d+(?:[.,]\d+)?\s*(?:gb|tb)\s*(?:nvme|ssd|hdd|sshd|sata|m\.2|hard\s?disk|hard\s?drive)",
+        r"\b\d+(?:[.,]\d+)?\s*(?:gb|tb|go|to)\s*(?:nvme|ssd|hdd|sshd|sata|m\.2|hard\s?disk|hard\s?drive|emmc)",
         text, re.I
     )]
-    capacity_matches = list(re.finditer(r"\b(\d{1,4})\s*gb\b", text, re.I))
+    capacity_matches = list(re.finditer(r"\b(\d{1,4})\s*(?:gb|go)\b", text, re.I))
     for match in capacity_matches:
+        # Mini-PC RAM sizes; larger numbers in "256go/8go" style titles are storage.
+        if int(match.group(1)) not in PLAUSIBLE_RAM_SIZES_GB:
+            continue
         if not any(start <= match.start() < end for start, end in storage_spans):
             # If the capacity appears after a word like SSD/HDD, ignore it.
             before = text[max(0, match.start() - 14):match.start()].lower()
@@ -322,20 +371,25 @@ def _find_ram_gb(text: str) -> int | None:
     return None
 
 
+def _storage_unit(unit: str) -> str:
+    """Normalize GB/TB and the French Go/To spelling."""
+    return {"GO": "GB", "TO": "TB"}.get(unit.upper(), unit.upper())
+
+
 def _find_storage(text: str) -> list[str]:
     found: list[tuple[int, str]] = []
     # Capacity first: 512 GB NVMe SSD, 500GB SSHD.
-    pattern_a = re.compile(r"\b(\d+(?:[.,]\d+)?)\s*(gb|tb)\s*(nvme(?:\s+ssd)?|ssd|hdd|sshd|sata\s+ssd|m\.2(?:\s+ssd)?)\b", re.I)
+    pattern_a = re.compile(r"\b(\d+(?:[.,]\d+)?)\s*(gb|tb|go|to)\s*(nvme(?:\s+ssd)?|ssd|hdd|sshd|sata\s+ssd|m\.2(?:\s+ssd)?)\b", re.I)
     for match in pattern_a.finditer(text):
         capacity = match.group(1).replace(",", ".")
-        unit = match.group(2).upper()
+        unit = _storage_unit(match.group(2))
         kind = re.sub(r"\s+", " ", match.group(3)).upper()
         found.append((match.start(), f"{capacity} {unit} {kind}"))
     # Reverse order: NVMe 512GB / SSD da 512 GB.
-    pattern_b = re.compile(r"\b(nvme|ssd|hdd|sshd|sata\s+ssd)\s*(?:da|of)?\s*(\d+(?:[.,]\d+)?)\s*(gb|tb)\b", re.I)
+    pattern_b = re.compile(r"\b(nvme|ssd|hdd|sshd|sata\s+ssd)\s*(?:da|of|de)?\s*(\d+(?:[.,]\d+)?)\s*(gb|tb|go|to)\b", re.I)
     for match in pattern_b.finditer(text):
         capacity = match.group(2).replace(",", ".")
-        found.append((match.start(), f"{capacity} {match.group(3).upper()} {match.group(1).upper()}"))
+        found.append((match.start(), f"{capacity} {_storage_unit(match.group(3))} {match.group(1).upper()}"))
     # Remove duplicate readings of the same span/value.
     result: list[str] = []
     for _, value in sorted(found):

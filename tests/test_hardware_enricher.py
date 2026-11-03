@@ -192,6 +192,35 @@ class HardwareAnalysisTests(unittest.TestCase):
         self.assertTrue(analysis["target_system"])
         self.assertFalse(analysis["non_system"])
 
+    def test_dry_run_titles_with_missing_cpu_models_are_parsed(self):
+        cases = {
+            "Lenovo ThinkCentre M70Q Tiny i5-10400t | 16 GB | 256GB Nvme + 500HDD": "Intel Core i5-10400T",
+            "HP ProDesk 400 G4 mini 8500T/256go/8go": "Intel Core i5-8500T",
+            "HP EliteDesk 800 G2 Mini, I-5 6500": "Intel Core i5-6500",
+            "Mini PC Lenovo ThinkCentre M910q Tiny | Intel i7-7700 | 16GB RAM": "Intel Core i7-7700",
+            "Lenovo ThinkCentre M70q Tiny, i3-10100T": "Intel Core i3-10100T",
+            "HP ProDesk 405 G6 Mini PC Ryzen 3 PRO 3200GE 8GB RAM 256GB SSD": "AMD Ryzen 3 PRO 3200GE",
+            "Lenovo ThinkCentre M715q Tiny AMD PRO A12-9800E 8GB": "AMD PRO A12-9800E",
+        }
+        for title, expected in cases.items():
+            with self.subTest(title=title):
+                self.assertEqual(enricher.analyze_hardware(title)["cpu"], expected)
+
+    def test_bare_number_is_not_guessed_when_ambiguous(self):
+        self.assertIsNone(enricher.analyze_hardware("Mini PC 1234T 8GB")["cpu"])
+
+    def test_french_go_and_to_units_are_read(self):
+        result = enricher.analyze_hardware(
+            "Dell OptiPlex 3080 Micro – i5 10e génération – 32 Go RAM – SSD 512 Go"
+        )
+        self.assertEqual(result["ram_gb"], 32)
+        self.assertIn("512 GB SSD", result["storage"])
+        result = enricher.analyze_hardware("HP ProDesk 600 G4 Mini – 16 Go RAM – 1,25 To SSD Samsung")
+        self.assertEqual(result["ram_gb"], 16)
+        self.assertIn("1.25 TB SSD", result["storage"])
+        result = enricher.analyze_hardware("HP ProDesk 400 G4 mini 8500T/256go/8go")
+        self.assertEqual(result["ram_gb"], 8)
+
 
 if __name__ == "__main__":
     unittest.main()
