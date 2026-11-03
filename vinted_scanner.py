@@ -15,6 +15,7 @@ from urllib.parse import urljoin, urlsplit, urlunsplit
 import requests
 
 import Config
+import hardware_enricher
 
 
 PROJECT_DIR = Path(__file__).resolve().parent
@@ -200,42 +201,54 @@ def build_catalog_params(query):
 
 
 def validate_notification_config(dry_run=False):
-    """Validate notification channels and require one outside dry-run mode."""
+    """Validate only the configured channels, while retaining legacy fallback."""
+    configured_channels = getattr(Config, "notification_channels", None)
+    if configured_channels is None:
+        # Backwards compatibility for existing Config.py files.
+        selected = {"email", "slack", "telegram"}
+    else:
+        if not isinstance(configured_channels, (list, tuple, set)):
+            raise ValueError("notification_channels must be a list of channel names")
+        selected = {str(channel).strip().lower() for channel in configured_channels}
+        unknown = selected.difference({"email", "slack", "telegram"})
+        if unknown:
+            raise ValueError("unsupported notification channel(s): " + ", ".join(sorted(unknown)))
+
+    # A dry run must be usable before credentials are configured.
+    if dry_run:
+        return
+
     smtp_values = {
         "smtp_username": getattr(Config, "smtp_username", ""),
         "smtp_psw": getattr(Config, "smtp_psw", ""),
         "smtp_server": getattr(Config, "smtp_server", ""),
     }
-    smtp_enabled = any(smtp_values.values())
-    if smtp_enabled:
+    smtp_enabled = "email" in selected and any(smtp_values.values())
+    if "email" in selected:
         missing = [name for name, value in smtp_values.items() if not value]
         recipients = getattr(Config, "smtp_toaddrs", None)
         if not recipients:
             missing.append("smtp_toaddrs")
         if missing:
-            raise ValueError(
-                "incomplete email notification configuration: "
-                + ", ".join(missing)
-            )
+            raise ValueError("incomplete email notification configuration: " + ", ".join(missing))
 
-    slack_enabled = bool(getattr(Config, "slack_webhook_url", ""))
+    slack_webhook = getattr(Config, "slack_webhook_url", "")
+    slack_enabled = "slack" in selected and bool(slack_webhook)
+    if "slack" in selected and not slack_webhook:
+        raise ValueError("Slack is selected in notification_channels but slack_webhook_url is empty")
+
     telegram_values = {
         "telegram_bot_token": getattr(Config, "telegram_bot_token", ""),
         "telegram_chat_id": getattr(Config, "telegram_chat_id", ""),
     }
-    telegram_enabled = any(telegram_values.values())
-    if telegram_enabled:
+    telegram_enabled = "telegram" in selected and any(telegram_values.values())
+    if "telegram" in selected:
         missing = [name for name, value in telegram_values.items() if not value]
         if missing:
-            raise ValueError(
-                "incomplete Telegram notification configuration: "
-                + ", ".join(missing)
-            )
+            raise ValueError("incomplete Telegram notification configuration: " + ", ".join(missing))
 
     if not dry_run and not (smtp_enabled or slack_enabled or telegram_enabled):
-        raise ValueError(
-            "configure at least one notification channel or use --dry-run"
-        )
+        raise ValueError("configure at least one selected notification channel or use --dry-run")
 
 
 def load_analyzed_items(database_path=ITEMS_DATABASE_PATH):
@@ -312,7 +325,7 @@ def send_slack_message(item_title, item_price, item_url, item_image, matched_que
 
 
 def send_telegram_message(
-    item_title, item_price, item_url, item_image, matched_query=None
+    item_title, item_price, item_url, item_image, matched_query=None, extra_lines=None
 ):
     """Send an HTML-safe Telegram notification and report its result."""
     message_lines = [
@@ -326,6 +339,8 @@ def send_telegram_message(
     message_lines.append(f"🔗 {html.escape(str(item_url))}")
     if item_image:
         message_lines.append(f"📷 {html.escape(str(item_image))}")
+    if extra_lines:
+        message_lines.extend(html.escape(str(line)) for line in extra_lines)
 
     url = f"https://api.telegram.org/bot{Config.telegram_bot_token}/sendMessage"
     params = {
@@ -349,33 +364,35 @@ def send_telegram_message(
 
 
 def send_notifications(
-    item_title, item_price, item_url, item_image, matched_query=None
+    item_title, item_price, item_url, item_image, matched_query=None, extra_lines=None
 ):
-    """Send all configured notifications and require every one to succeed."""
+    """Send via configured channels; hardware details are added to Telegram."""
+    configured_channels = getattr(Config, "notification_channels", None)
+    if configured_channels is None:
+        # Backwards compatibility for existing Config.py files.
+        selected = {"email", "slack", "telegram"}
+    else:
+        selected = {str(channel).strip().lower() for channel in configured_channels}
+
     results = []
-    if Config.smtp_username and Config.smtp_server:
+    if "email" in selected and Config.smtp_username and Config.smtp_server:
         results.append(
-            send_email(
-                item_title, item_price, item_url, item_image, matched_query
-            )
+            send_email(item_title, item_price, item_url, item_image, matched_query)
         )
-    if Config.slack_webhook_url:
+    if "slack" in selected and Config.slack_webhook_url:
         results.append(
-            send_slack_message(
-                item_title, item_price, item_url, item_image, matched_query
-            )
+            send_slack_message(item_title, item_price, item_url, item_image, matched_query)
         )
-    if Config.telegram_bot_token and Config.telegram_chat_id:
+    if "telegram" in selected and Config.telegram_bot_token and Config.telegram_chat_id:
         results.append(
             send_telegram_message(
-                item_title, item_price, item_url, item_image, matched_query
+                item_title, item_price, item_url, item_image, matched_query,
+                extra_lines=extra_lines,
             )
         )
 
     if not results:
-        logging.warning(
-            "No notification channel is configured; item was not saved"
-        )
+        logging.warning("No selected notification channel is configured; item was not saved")
         return False
     return all(results)
 
@@ -446,6 +463,7 @@ def normalize_item(item):
         "price": item_price,
         "url": item_url,
         "image": photo_data.get("full_size_url"),
+        "description": str(item.get("description") or ""),
     }
 
 
@@ -458,6 +476,8 @@ def print_dry_run_item(item, matched_query=None):
     print(f"URL: {item['url']}")
     if item["image"]:
         print(f"Image: {item['image']}")
+    for line in hardware_enricher.build_telegram_lines(item, matched_query):
+        print(line)
     print()
 
 
@@ -467,11 +487,18 @@ def process_item(
     dry_run,
     database_path=ITEMS_DATABASE_PATH,
     matched_query=None,
+    session=None,
 ):
     """Process one item and persist it only after the requested action succeeds."""
     normalized_item = normalize_item(item)
     if not normalized_item or normalized_item["id"] in analyzed_items:
         return True
+
+    fetch_details = bool(getattr(Config, "hardware_fetch_details", True))
+    normalized_item = hardware_enricher.enrich_item(
+        normalized_item, session=session, fetch_details=fetch_details
+    )
+    extra_lines = hardware_enricher.build_telegram_lines(normalized_item, matched_query)
 
     if dry_run:
         print_dry_run_item(normalized_item, matched_query)
@@ -483,6 +510,7 @@ def process_item(
             normalized_item["url"],
             normalized_item["image"],
             matched_query,
+            extra_lines=extra_lines,
         )
 
     if succeeded:
@@ -521,6 +549,7 @@ def process_queries(session, catalog_url, queries, api_headers, analyzed_items, 
                 analyzed_items,
                 dry_run,
                 matched_query=matched_query,
+                session=session,
             ):
                 processing_failed = True
     return processing_failed

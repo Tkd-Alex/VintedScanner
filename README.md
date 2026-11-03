@@ -235,6 +235,19 @@ To display all available command-line options:
 python3 vinted_scanner.py -h
 ```
 
+### Telegram Hardware Enrichment
+
+This packaged version can append a local hardware analysis to each new Telegram alert. It keeps all results in the same message and defaults to Telegram only. See [HARDWARE_ENRICHMENT.md](HARDWARE_ENRICHMENT.md) for the data model, limitations, configuration and installation options.
+
+The default sample configuration uses:
+
+```python
+notification_channels = ["telegram"]
+hardware_fetch_details = True
+```
+
+The extra detail request is attempted only for newly detected items and is non-fatal if Vinted does not return the page content. To skip it, set `hardware_fetch_details = False`.
+
 ### Automation with Cron
 
 To run the script periodically, you can set up a cron job. For example, to run the script every hour:

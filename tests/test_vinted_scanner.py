@@ -69,6 +69,23 @@ class DatabaseTests(unittest.TestCase):
 
 
 class NotificationTests(unittest.TestCase):
+    @patch("vinted_scanner.send_telegram_message", return_value=True)
+    @patch("vinted_scanner.send_email", return_value=True)
+    @patch("vinted_scanner.send_slack_message", return_value=True)
+    def test_configured_channels_can_force_telegram_only(self, send_slack, send_email, send_telegram):
+        with patch.object(scanner.Config, "notification_channels", ["telegram"]), patch.object(
+            scanner.Config, "smtp_username", "user@example.test"
+        ), patch.object(scanner.Config, "smtp_server", "smtp.example.test"), patch.object(
+            scanner.Config, "slack_webhook_url", "https://slack.example.test/hook"
+        ), patch.object(scanner.Config, "telegram_bot_token", "token"), patch.object(
+            scanner.Config, "telegram_chat_id", "123"
+        ):
+            result = scanner.send_notifications("Title", "10 EUR", "url", None, extra_lines=["CPU details"])
+        self.assertTrue(result)
+        send_telegram.assert_called_once()
+        send_email.assert_not_called()
+        send_slack.assert_not_called()
+
     @patch("vinted_scanner.requests.post")
     def test_telegram_escapes_html_and_sets_timeout(self, post):
         post.return_value.raise_for_status.return_value = None
@@ -90,10 +107,14 @@ class NotificationTests(unittest.TestCase):
 
     @patch("vinted_scanner.send_email", return_value=False)
     def test_all_configured_notifications_must_succeed(self, send_email):
-        with patch.object(
+        with patch.object(scanner.Config, "notification_channels", ["email"]), patch.object(
             scanner.Config, "smtp_username", "user@example.test"
         ), patch.object(
             scanner.Config, "smtp_server", "smtp.example.test"
+        ), patch.object(
+            scanner.Config, "smtp_psw", "password"
+        ), patch.object(
+            scanner.Config, "smtp_toaddrs", ["recipient@example.test"]
         ), patch.object(
             scanner.Config, "slack_webhook_url", ""
         ), patch.object(
@@ -113,6 +134,7 @@ class NotificationConfigurationTests(unittest.TestCase):
         "smtp_psw": "",
         "smtp_server": "",
         "smtp_toaddrs": ["User <user@example.test>"],
+        "notification_channels": [],
         "slack_webhook_url": "",
         "telegram_bot_token": "",
         "telegram_chat_id": "",
@@ -129,6 +151,7 @@ class NotificationConfigurationTests(unittest.TestCase):
 
     def test_partial_telegram_configuration_is_rejected(self):
         values = dict(self.notification_defaults)
+        values["notification_channels"] = ["telegram"]
         values["telegram_bot_token"] = "token"
 
         with patch.multiple(scanner.Config, **values):
@@ -137,6 +160,7 @@ class NotificationConfigurationTests(unittest.TestCase):
 
     def test_partial_email_configuration_is_rejected(self):
         values = dict(self.notification_defaults)
+        values["notification_channels"] = ["email"]
         values["smtp_username"] = "user@example.test"
 
         with patch.multiple(scanner.Config, **values):
