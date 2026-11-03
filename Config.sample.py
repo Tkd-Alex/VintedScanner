@@ -29,7 +29,7 @@ vinted_locale = "it-IT"
 # if the catalogue result does not already include a description. Set False to skip it.
 hardware_fetch_details = True
 # Pause (seconds) before each listing-page request.
-hardware_detail_fetch_delay_seconds = 1.0
+hardware_detail_fetch_delay_seconds = 2.0
 
 # Notify listings from the supported HP Mini / Lenovo Tiny / Dell Micro chassis families.
 hardware_require_target_models = True

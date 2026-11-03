@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -485,6 +486,31 @@ class ItemProcessingTests(unittest.TestCase):
             )
         fetch_description.assert_called_once()
         send_notifications.assert_called_once()
+
+    @patch("vinted_scanner.time.sleep")
+    @patch("vinted_scanner.hardware_enricher.fetch_listing_description")
+    def test_rate_limited_detail_fetch_retries_once_then_pauses(self, fetch, sleep):
+        fetch.side_effect = scanner.hardware_enricher.ListingRateLimited(5)
+        item = {"url": "https://example.test/items/1", "title": "Lenovo ThinkCentre M720q"}
+        try:
+            with self.assertLogs(level="WARNING"):
+                self.assertEqual(scanner.fetch_item_description(item), "")
+            self.assertEqual(fetch.call_count, 2)
+            self.assertIn(unittest.mock.call(5), sleep.call_args_list)
+            self.assertEqual(scanner.fetch_item_description(item), "")
+            self.assertEqual(fetch.call_count, 2)
+        finally:
+            scanner._detail_fetch_state["paused"] = False
+
+    def test_listing_page_429_raises_only_when_requested(self):
+        session = Mock()
+        session.get.return_value = Mock(status_code=429, headers={"Retry-After": "12"})
+        session.get.return_value.raise_for_status.side_effect = requests.exceptions.HTTPError("429")
+        enricher = scanner.hardware_enricher
+        self.assertEqual(enricher.fetch_listing_description("https://example.test/i", session), "")
+        with self.assertRaises(enricher.ListingRateLimited) as raised:
+            enricher.fetch_listing_description("https://example.test/i", session, raise_on_rate_limit=True)
+        self.assertEqual(raised.exception.retry_after, 12.0)
 
 
 class MainTests(unittest.TestCase):

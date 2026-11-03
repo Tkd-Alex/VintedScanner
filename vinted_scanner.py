@@ -128,7 +128,11 @@ DDR4_RE = re.compile(r"\bddr\s*4\b", re.IGNORECASE)
 DDR3_RE = re.compile(r"\bddr\s*3\b", re.IGNORECASE)
 
 
-DEFAULT_DETAIL_FETCH_DELAY_SECONDS = 1.0
+DEFAULT_DETAIL_FETCH_DELAY_SECONDS = 2.0
+DEFAULT_DETAIL_RATE_LIMIT_WAIT_SECONDS = 60.0
+MAX_DETAIL_RATE_LIMIT_WAIT_SECONDS = 120.0
+# Listing-page fetching pauses for the rest of a run after repeated HTTP 429.
+_detail_fetch_state = {"paused": False}
 DEFAULT_TELEGRAM_SEND_DELAY_SECONDS = 1.0
 TELEGRAM_DEFAULT_RETRY_SECONDS = 5.0
 TELEGRAM_MAX_RETRY_SECONDS = 30.0
@@ -156,12 +160,35 @@ def wait_before_detail_fetch():
 
 
 def fetch_item_description(item, session=None):
-    """Fetch one listing description politely; failures return an empty string."""
-    wait_before_detail_fetch()
-    return hardware_enricher.fetch_listing_description(
-        item["url"], session=session, headers=build_detail_headers(),
-        title=item["title"],
-    )
+    """Fetch one listing description politely; failures return an empty string.
+
+    On HTTP 429 the request is retried once after Vinted's Retry-After hint (or
+    a default wait); a second 429 stops listing-page requests for the rest of
+    the run, and the remaining listings are analyzed from their titles.
+    """
+    if _detail_fetch_state["paused"]:
+        return ""
+    for attempt in (1, 2):
+        wait_before_detail_fetch()
+        try:
+            return hardware_enricher.fetch_listing_description(
+                item["url"], session=session, headers=build_detail_headers(),
+                title=item["title"], raise_on_rate_limit=True,
+            )
+        except hardware_enricher.ListingRateLimited as limited:
+            if attempt == 1:
+                wait = min(
+                    limited.retry_after or DEFAULT_DETAIL_RATE_LIMIT_WAIT_SECONDS,
+                    MAX_DETAIL_RATE_LIMIT_WAIT_SECONDS,
+                )
+                logging.warning("Vinted rate-limited listing pages; retrying in %s s", wait)
+                time.sleep(wait)
+                continue
+            _detail_fetch_state["paused"] = True
+            logging.warning(
+                "Vinted still rate-limits listing pages; skipping descriptions for the rest of this run"
+            )
+    return ""
 
 
 # CPU Hunt: loose low-power CPUs that can upgrade a cheap i3/Pentium mini PC.
@@ -1245,6 +1272,7 @@ def load_configuration(dry_run=False):
 def main(dry_run=False):
     """Run mini-PC searches and, independently, the optional RAM/CPU Hunt searches."""
     configure_logging()
+    _detail_fetch_state["paused"] = False
     try:
         catalog_url, queries, api_headers = load_configuration(dry_run)
         ram_hunt_queries, ram_hunt_max_price = load_ram_hunt_configuration()

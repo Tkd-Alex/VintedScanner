@@ -455,11 +455,27 @@ def _strip_title_prefix(text: str, title: str) -> str:
     return text
 
 
+class ListingRateLimited(Exception):
+    """Raised when Vinted answers a listing-page request with HTTP 429."""
+
+    def __init__(self, retry_after: float | None) -> None:
+        super().__init__(f"listing page rate-limited (retry_after={retry_after})")
+        self.retry_after = retry_after
+
+
+def _retry_after_seconds(response: Any) -> float | None:
+    try:
+        return float(response.headers.get("Retry-After"))
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
 def fetch_listing_description(
     item_url: str,
     session: Any = None,
     headers: dict[str, str] | None = None,
     title: str = "",
+    raise_on_rate_limit: bool = False,
 ) -> str:
     """Try to obtain listing text from the item's page; failure is non-fatal.
 
@@ -478,6 +494,8 @@ def fetch_listing_description(
             response = requests.get(item_url, **request_options)
         else:
             response = session.get(item_url, **request_options)
+        if raise_on_rate_limit and response.status_code == 429:
+            raise ListingRateLimited(_retry_after_seconds(response))
         response.raise_for_status()
         parser = _ListingHTMLParser()
         parser.feed(response.text[:2_000_000])
@@ -508,6 +526,8 @@ def fetch_listing_description(
         if not filtered:
             return ""
         return max(filtered, key=len)[:MAX_DESCRIPTION_CHARS]
+    except ListingRateLimited:
+        raise
     except Exception as error:  # detail enrichment must never stop the base notifier
         logging.info("Could not fetch listing description (%s): %s", item_url, error)
         return ""
