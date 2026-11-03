@@ -142,14 +142,31 @@ class HardwareAnalysisTests(unittest.TestCase):
         self.assertEqual(result["cores"], 6)
         self.assertEqual(result["cpu_detail"], "6 core / 6 thread · nominal TDP 65 W")
 
-    def test_html_is_escaped_by_caller_and_lines_include_analysis(self):
+    def test_lines_are_grouped_in_sections(self):
         item = {
             "title": "Test <mini>", "price": "100 EUR", "url": "https://vinted.test/1",
             "description": "", "hardware_analysis": enricher.analyze_hardware("i5-7500T 16GB RAM 512GB SSD")
         }
         lines = enricher.build_telegram_lines(item, "Tiny")
-        self.assertTrue(any("Proxmox suitability" in line for line in lines))
-        self.assertTrue(any("AI:" in line for line in lines))
+        self.assertTrue(any("<b>🖥 Hardware</b>" in line for line in lines))
+        self.assertTrue(any(line.startswith("<blockquote expandable><b>🔎 To check</b>") for line in lines))
+        self.assertFalse(any("HARDWARE ANALYSIS" in line for line in lines))
+
+    def test_telegram_lines_escape_listing_text_and_headline_shows_verdict(self):
+        analysis = enricher.analyze_hardware(
+            "Lenovo ThinkCentre M900 Tiny 8GB RAM 256GB SSD",
+            "Seller <script> & co " + "parola " * 120,
+            price="120.00 EUR",
+        )
+        lines = enricher.build_telegram_lines({"title": "x", "hardware_analysis": analysis})
+        text = "\n".join(lines)
+        self.assertIn("Seller &lt;script&gt; &amp; co", text)
+        self.assertNotIn("<script>", text)
+        self.assertIn("parola …</blockquote>", text)
+        headline = enricher.build_telegram_headline({"hardware_analysis": analysis})
+        self.assertIn(f"<b>{analysis['score']}/100</b>", headline)
+        self.assertIn(analysis["verdict"], headline)
+        self.assertIn("With 16 GB: <b>€", text)
 
     def test_detail_fetch_failure_is_non_fatal(self):
         session = Mock()

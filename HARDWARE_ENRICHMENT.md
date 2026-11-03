@@ -15,6 +15,10 @@ VintedScanner still discovers listings and handles duplicate detection. Before s
 - strict filtering for supported HP EliteDesk/ProDesk Mini, Lenovo ThinkCentre Tiny, and Dell OptiPlex Micro listings;
 - a concise note about AI acceleration and details that should be verified with the seller.
 
+### Message layout
+
+The alert is built as Telegram HTML (`message_format.py` holds the escaping helpers). It opens with a decision line, a coloured marker plus score and verdict (🟢 strong, 🟡 worth evaluating, 🟠 upgradeable or to verify, 🔴 weak), and the upgrade score when one exists. Then come the title, the price and the *Open listing* / *Photo* links, with the photo shown as a small preview, and the matched query. Next are short bold sections: **Hardware**, **Cost**, **CPU upgrade** (only when a candidate exists) and **Score breakdown**. The checklist and the seller description sit in collapsed blocks that expand on tap. Lines that carry no information are left out, such as an unidentified GPU, the generic AI note or an unknown vPro status. RAM Hunt and CPU Hunt alerts use the same layout.
+
 Only Telegram is enabled by default through `notification_channels = ["telegram"]`. E-mail and Slack values are left empty in `Config.sample.py` and are not sent while they are not selected.
 
 ## Data and limitations

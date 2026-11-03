@@ -13,6 +13,8 @@ import re
 from html.parser import HTMLParser
 from typing import Any
 
+import message_format as fmt
+
 
 REQUEST_TIMEOUT_SECONDS = 15
 MAX_DESCRIPTION_CHARS = 520
@@ -1202,102 +1204,165 @@ def enrich_item(
     return item
 
 
-def build_telegram_lines(item: dict[str, Any], matched_query: str | None = None) -> list[str]:
-    """Build plain-text lines; the scanner's Telegram sender HTML-escapes them."""
-    analysis = item.get("hardware_analysis") or analyze_hardware(
+VERDICT_MARKERS = {
+    "Strong candidate": "🟢",
+    "Worth evaluating": "🟡",
+    "Cheap base, potentially upgradeable": "🟠",
+    "Weak as configured; upgrade to be verified": "🟠",
+    "Weak for a Proxmox node": "🔴",
+}
+
+
+def _analysis_for(item: dict[str, Any]) -> dict[str, Any]:
+    return item.get("hardware_analysis") or analyze_hardware(
         str(item.get("title") or ""), str(item.get("description") or ""), str(item.get("price") or "")
     )
-    lines = ["", "──────── HARDWARE ANALYSIS ────────"]
-    if analysis.get("model"):
-        lines.append(f"🖥️ Model: {analysis['model']}")
-    if analysis.get("cpu"):
-        lines.append(f"🧠 CPU: {analysis['cpu']}")
-    elif analysis.get("cpu_estimated") and analysis.get("platform"):
-        lines.append("🧠 CPU: Not identified (score uses a typical CPU for this platform and tier)")
-    else:
-        lines.append("🧠 CPU: Not identified")
-    lines.append(f"   {analysis.get('cpu_detail')}")
-    if analysis.get("cpu_note"):
-        lines.append(f"   {analysis['cpu_note']}")
-    lines.append(f"🧮 RAM: {analysis['ram_gb']} GB" if analysis.get("ram_gb") is not None else "🧮 RAM: Not identified")
-    lines.append("💾 Storage: " + (" + ".join(analysis["storage"]) if analysis.get("storage") else "Not identified"))
-    lines.append(f"🎮 GPU: {analysis.get('gpu') or 'Not identified'}")
-    lines.append(f"📦 Form factor: {analysis.get('form_factor') or 'Not confirmed'}")
-    lines.append(f"🎯 Target chassis: {'YES — ' + analysis['target_family'] if analysis.get('target_system') else 'NO / NOT CONFIRMED'}")
-    platform = analysis.get("platform")
-    if platform:
-        generation = (
-            f"{platform['generation']}th gen Intel" if platform.get("generation") else "AMD"
-        )
-        pcie = {True: "yes", False: "no", None: "to verify"}[platform.get("pcie_slot")]
-        tdp = f"{platform['max_tdp_w']} W" if platform.get("max_tdp_w") else "to verify"
-        lines.append(
-            f"🧬 Platform: {platform['name']} · {generation} · max {platform['max_ram_gb']} GB RAM "
-            f"(official) · PCIe slot: {pcie} · CPU class up to {tdp}"
-        )
-    else:
-        lines.append("🧬 Platform: model not in the local platform table")
-    lines.append(f"🛰️ Remote management (vPro/AMT): {analysis.get('remote_management') or 'unknown'}")
-    if analysis.get("legacy_note"):
-        lines.append(f"⚠️ {analysis['legacy_note']}")
-    cpu_upgrade = analysis.get("cpu_upgrade") or {}
-    if cpu_upgrade.get("candidate_cpu"):
-        candidate_detail = f"{cpu_upgrade['candidate_cores']} core / {cpu_upgrade['candidate_threads']} thread"
-        if cpu_upgrade.get("candidate_tdp_w"):
-            candidate_detail += f" · {cpu_upgrade['candidate_tdp_w']} W"
-        if cpu_upgrade.get("needed"):
-            lines.append(f"🔧 CPU upgrade candidate: {cpu_upgrade['candidate_cpu']} ({candidate_detail})")
-            if cpu_upgrade.get("cost_eur") is not None:
-                lines.append(f"   CPU budget: €{cpu_upgrade['cost_eur']:.2f}")
-            else:
-                lines.append("   CPU budget: not configured — check current listings")
-        else:
-            lines.append(f"🔧 CPU upgrade: current CPU already at/above listed candidate ({cpu_upgrade['candidate_cpu']})")
-        lines.append(f"   Platform reference: {cpu_upgrade.get('reference')}")
-        lines.append("   Exact MTM/BIOS/PSU and cooling still need verification before buying a CPU.")
-    else:
-        lines.append("🔧 CPU upgrade: platform/compatible CPU not identified with enough certainty; no CPU cost included.")
-    parts = analysis.get("score_parts", {})
-    lines.append(
-        f"📊 Current-spec score: {analysis.get('score', 0)}/100 "
-        f"(CPU {parts.get('cpu', 0)}/40{' est.' if parts.get('cpu_estimated') else ''} · "
-        f"price {parts.get('price', 0)}/25 · RAM {parts.get('ram', 0)}/10 · "
-        f"storage {parts.get('storage', 0)}/10 · platform {parts.get('platform', 0)}/15)"
-    )
+
+
+def build_telegram_headline(item: dict[str, Any]) -> str:
+    """Return the decision line shown above the listing title (Telegram HTML)."""
+    analysis = _analysis_for(item)
+    verdict = str(analysis.get("verdict") or "")
+    marker = VERDICT_MARKERS.get(verdict, "⚪")
+    headline = f"{marker} <b>{analysis.get('score', 0)}/100</b> · {fmt.esc(verdict)}"
     if analysis.get("upgrade_score") is not None:
-        upgrade_parts = analysis.get("upgrade_score_parts") or {}
-        lines.append(
-            f"📈 Upgrade-opportunity score: {analysis['upgrade_score']}/100 "
-            f"(candidate CPU + estimated RAM to 16 GB; price component based on configured costs)"
-        )
-    elif cpu_upgrade.get("needed") and cpu_upgrade.get("cost_eur") is None:
-        lines.append("📈 Upgrade-opportunity score: pending — CPU upgrade price not configured")
-    elif cpu_upgrade.get("needed"):
-        lines.append("📈 Upgrade-opportunity score: pending — installed RAM unknown, build cost not estimated")
-    lines.append(f"⚙️ Proxmox suitability: {analysis.get('verdict')}")
-    if analysis.get("total_to_16_eur") is not None:
-        lines.append(f"💶 Total estimate with 16 GB: €{analysis['total_to_16_eur']:.2f} (listing + estimated RAM; shipping/buyer fee excluded)")
+        headline += f" · ⬆️ {analysis['upgrade_score']}/100 after upgrade"
+    return headline
+
+
+def _hardware_rows(analysis: dict[str, Any]) -> list[str]:
+    rows = []
+    if analysis.get("cpu"):
+        rows.append(f"CPU: <b>{fmt.esc(analysis['cpu'])}</b> · {fmt.esc(analysis.get('cpu_detail'))}")
+    elif analysis.get("cpu_estimated") and analysis.get("platform"):
+        rows.append("CPU: ❓ not identified · score assumes a typical CPU for this platform")
     else:
-        lines.append("💶 Total estimate with 16 GB: to verify RAM configuration")
-    if analysis.get("total_to_32_eur") is not None:
-        lines.append(f"💶 Total estimate with 32 GB: €{analysis['total_to_32_eur']:.2f} (listing + estimated RAM kit; shipping/buyer fee excluded)")
+        rows.append("CPU: ❓ not identified")
+    if analysis.get("cpu_note"):
+        rows.append(f"   {fmt.italic(analysis['cpu_note'])}")
+
+    platform = analysis.get("platform")
+    if analysis.get("ram_gb") is not None:
+        ram = f"RAM: <b>{analysis['ram_gb']} GB</b>"
+        if platform and platform.get("max_ram_gb"):
+            ram += f" · max {platform['max_ram_gb']} GB"
+        rows.append(ram)
     else:
-        lines.append("💶 Total estimate with 32 GB: to verify RAM configuration")
-    if analysis.get("total_to_16_with_cpu_eur") is not None:
-        lines.append(f"🧾 Build estimate: 16 GB + CPU upgrade = €{analysis['total_to_16_with_cpu_eur']:.2f} (listing + configured upgrade budgets)")
-    elif cpu_upgrade.get("needed") and cpu_upgrade.get("cost_eur") is None:
-        lines.append("🧾 Build estimate with CPU upgrade: incomplete — add a CPU price to hardware_cpu_upgrade_costs_eur")
+        rows.append("RAM: ❓ not stated")
+    storage = " + ".join(analysis["storage"]) if analysis.get("storage") else None
+    rows.append(f"Disk: <b>{fmt.esc(storage)}</b>" if storage else "Disk: ❓ not stated")
+    if analysis.get("gpu"):
+        rows.append(f"GPU: {fmt.esc(analysis['gpu'])}")
+
+    if platform:
+        generation = f"{platform['generation']}th gen Intel" if platform.get("generation") else "AMD"
+        pcie = {True: "PCIe slot", False: "no PCIe", None: "PCIe to verify"}[platform.get("pcie_slot")]
+        tdp = f"CPU ≤{platform['max_tdp_w']} W" if platform.get("max_tdp_w") else "CPU TDP to verify"
+        rows.append(f"Base: {fmt.esc(platform['name'])} · {generation} · {pcie} · {tdp}")
+    else:
+        model = analysis.get("model") or "model not identified"
+        form = analysis.get("form_factor") or "form factor not confirmed"
+        rows.append(f"Base: {fmt.esc(model)} · {fmt.esc(form)} · not in the platform table")
+    remote = str(analysis.get("remote_management") or "")
+    if remote and not remote.startswith("unknown"):
+        rows.append(f"vPro/AMT: {fmt.esc(remote)}")
+    if not analysis.get("target_system"):
+        rows.append("⚠️ Chassis not confirmed as Mini/Tiny/Micro")
+    return rows
+
+
+def _cost_rows(analysis: dict[str, Any]) -> list[str]:
+    def total(key: str, label: str, missing: str | None) -> str | None:
+        if analysis.get(key) is not None:
+            return f"{label}: <b>{fmt.euro(analysis[key])}</b>"
+        return f"{label}: {missing}" if missing else None
+
+    cpu_upgrade = analysis.get("cpu_upgrade") or {}
+    with_cpu_missing = None
+    if cpu_upgrade.get("needed") and cpu_upgrade.get("cost_eur") is None:
+        with_cpu_missing = "incomplete — add a CPU price to hardware_cpu_upgrade_costs_eur"
     elif cpu_upgrade.get("needed"):
-        lines.append("🧾 Build estimate with CPU upgrade: incomplete — installed RAM unknown")
-    if analysis.get("total_to_32_with_cpu_eur") is not None:
-        lines.append(f"🧾 Build estimate: 32 GB + CPU upgrade = €{analysis['total_to_32_with_cpu_eur']:.2f}")
-    lines.append(f"🤖 AI: {analysis.get('ai_note')}")
+        with_cpu_missing = "incomplete — installed RAM unknown"
+    rows = [
+        total("total_to_16_eur", "With 16 GB", "RAM configuration to verify"),
+        total("total_to_32_eur", "With 32 GB", "RAM configuration to verify"),
+        total("total_to_16_with_cpu_eur", "16 GB + CPU upgrade", with_cpu_missing),
+        total("total_to_32_with_cpu_eur", "32 GB + CPU upgrade", None),
+    ]
+    if analysis.get("ram_upgrade_note"):
+        rows.append(f"   {fmt.italic(analysis['ram_upgrade_note'])}")
+    return rows
+
+
+def _upgrade_rows(analysis: dict[str, Any]) -> list[str]:
+    cpu_upgrade = analysis.get("cpu_upgrade") or {}
+    if not cpu_upgrade.get("candidate_cpu"):
+        return []
+    candidate = fmt.esc(cpu_upgrade["candidate_cpu"])
+    rows = []
+    if cpu_upgrade.get("needed"):
+        detail = f"{cpu_upgrade['candidate_cores']} core / {cpu_upgrade['candidate_threads']} thread"
+        if cpu_upgrade.get("candidate_tdp_w"):
+            detail += f" · {cpu_upgrade['candidate_tdp_w']} W"
+        rows.append(f"Candidate: <b>{candidate}</b> · {detail}")
+        if cpu_upgrade.get("cost_eur") is not None:
+            rows.append(f"CPU budget: {fmt.euro(cpu_upgrade['cost_eur'])}")
+        else:
+            rows.append("CPU budget: not configured — check current listings")
+        if analysis.get("upgrade_score") is None:
+            if cpu_upgrade.get("cost_eur") is None:
+                rows.append("Upgrade score: pending — CPU upgrade price not configured")
+            else:
+                rows.append("Upgrade score: pending — installed RAM unknown, build cost not estimated")
+    else:
+        rows.append(f"Current CPU already at/above the listed candidate ({candidate})")
+    if cpu_upgrade.get("reference"):
+        rows.append(f"   {fmt.italic(cpu_upgrade['reference'])}")
+    rows.append(f"   {fmt.italic('Verify exact MTM/BIOS/PSU and cooling before buying a CPU.')}")
+    return rows
+
+
+def _score_rows(analysis: dict[str, Any]) -> list[str]:
+    parts = analysis.get("score_parts", {})
+    estimated = parts.get("cpu_estimated")
+    breakdown = (
+        f"CPU {parts.get('cpu', 0)}/40{'*' if estimated else ''} · "
+        f"Price {parts.get('price', 0)}/25 · RAM {parts.get('ram', 0)}/10 · "
+        f"Disk {parts.get('storage', 0)}/10 · Platform {parts.get('platform', 0)}/15"
+    )
+    rows = [fmt.code(breakdown)]
+    if estimated:
+        rows.append(fmt.italic("* CPU estimated from the platform"))
+    return rows
+
+
+def build_telegram_lines(item: dict[str, Any], matched_query: str | None = None) -> list[str]:
+    """Build the hardware body of a Telegram alert as Telegram HTML lines."""
+    analysis = _analysis_for(item)
+    lines = []
+    lines += fmt.section("🖥 Hardware", _hardware_rows(analysis))
+    lines += fmt.section("💰 Cost (excl. shipping/fees)", _cost_rows(analysis))
+    lines += fmt.section("🔧 CPU upgrade", _upgrade_rows(analysis))
+    lines += fmt.section("📊 Score breakdown", _score_rows(analysis))
+
+    notes = []
+    if analysis.get("legacy_note"):
+        notes.append(f"⚠️ {fmt.esc(analysis['legacy_note'])}")
+    if analysis.get("gpu"):
+        notes.append(f"🤖 AI: {fmt.esc(analysis.get('ai_note'))}")
+    if notes:
+        lines += ["", *notes]
+
+    # The CPU note and the RAM estimate note are already shown in their sections.
+    shown = {analysis.get("cpu_note"), analysis.get("ram_upgrade_note")}
+    checks = [f"• {fmt.esc(entry)}" for entry in analysis.get("missing") or [] if entry not in shown]
+    checks.append(fmt.italic("Specs are inferred from listing text and the local CPU catalog; verify with the seller."))
+    lines += fmt.expandable("🔎 To check", checks)
+
     if analysis.get("description"):
         desc = analysis["description"]
-        if len(desc) > MAX_DESCRIPTION_CHARS:
-            desc = desc[:MAX_DESCRIPTION_CHARS - 1].rstrip() + "…"
-        lines.append(f"📝 Description: {desc}")
-    if analysis.get("missing"):
-        lines.append("🔎 Check: " + "; ".join(analysis["missing"]))
-    lines.append("ℹ️ Specs are inferred from listing text and the local CPU catalog; verify with the seller.")
+        if len(desc) >= MAX_DESCRIPTION_CHARS:
+            # analyze_hardware already cut it; end on a whole word.
+            desc = desc[:MAX_DESCRIPTION_CHARS - 1].rsplit(" ", 1)[0].rstrip() + " …"
+        lines += fmt.expandable("📝 Seller description", [fmt.esc(desc)])
     return lines

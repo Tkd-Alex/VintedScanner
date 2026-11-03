@@ -2,7 +2,6 @@
 """Search Vinted and notify users about newly listed matching items."""
 import argparse
 import email.utils
-import html
 import json
 import logging
 import re
@@ -19,6 +18,7 @@ import requests
 
 import Config
 import hardware_enricher
+import message_format as fmt
 
 
 PROJECT_DIR = Path(__file__).resolve().parent
@@ -502,30 +502,45 @@ def send_slack_message(item_title, item_price, item_url, item_image, matched_que
         return False
 
 
-def send_telegram_message(
-    item_title, item_price, item_url, item_image, matched_query=None, extra_lines=None
-):
-    """Send an HTML-safe Telegram notification and report its result."""
-    message_lines = [
-        f"<b>{html.escape(str(item_title))}</b>",
-        f"🏷️ {html.escape(str(item_price))}",
-    ]
-    if matched_query:
-        message_lines.append(
-            f"Matched query: {html.escape(str(matched_query))}"
-        )
-    message_lines.append(f"🔗 {html.escape(str(item_url))}")
+def telegram_header_lines(item_title, item_price, item_url, item_image, matched_query=None, headline=None):
+    """Return the Telegram HTML header: decision line, title, price and links."""
+    lines = [headline] if headline else []
+    lines.append(fmt.bold(item_title))
+    links = [f"💶 <b>{fmt.esc(fmt.format_price(item_price))}</b>", f"🔗 {fmt.link('Open listing', item_url)}"]
     if item_image:
-        message_lines.append(f"📷 {html.escape(str(item_image))}")
-    if extra_lines:
-        message_lines.extend(html.escape(str(line)) for line in extra_lines)
+        links.append(f"📷 {fmt.link('Photo', item_image)}")
+    lines.append("  ·  ".join(links))
+    if matched_query:
+        lines.append(f"🔍 {fmt.italic(matched_query)}")
+    return lines
 
+
+def send_telegram_message(
+    item_title, item_price, item_url, item_image, matched_query=None, extra_lines=None,
+    headline=None,
+):
+    """Send a Telegram notification and report its result.
+
+    ``headline`` and ``extra_lines`` must already be Telegram HTML (see
+    message_format); the title, price, URLs and query are escaped here.
+    """
+    message_lines = telegram_header_lines(
+        item_title, item_price, item_url, item_image, matched_query, headline
+    )
+    if extra_lines:
+        message_lines.extend(str(line) for line in extra_lines)
+
+    # Use the listing photo as a small preview instead of a raw image URL.
+    preview = (
+        {"url": item_image, "prefer_small_media": True, "show_above_text": False}
+        if item_image else {"is_disabled": True}
+    )
     url = f"https://api.telegram.org/bot{Config.telegram_bot_token}/sendMessage"
     params = {
         "chat_id": Config.telegram_chat_id,
         "text": "\n".join(message_lines),
         "parse_mode": "HTML",
-        "link_preview_options": json.dumps({"is_disabled": True}),
+        "link_preview_options": json.dumps(preview),
     }
     try:
         response = requests.post(
@@ -573,7 +588,8 @@ def wait_after_telegram_message():
 
 
 def send_notifications(
-    item_title, item_price, item_url, item_image, matched_query=None, extra_lines=None
+    item_title, item_price, item_url, item_image, matched_query=None, extra_lines=None,
+    headline=None,
 ):
     """Send via configured channels; hardware details are added to Telegram."""
     configured_channels = getattr(Config, "notification_channels", None)
@@ -596,7 +612,7 @@ def send_notifications(
         results.append(
             send_telegram_message(
                 item_title, item_price, item_url, item_image, matched_query,
-                extra_lines=extra_lines,
+                extra_lines=extra_lines, headline=headline,
             )
         )
         wait_after_telegram_message()
@@ -679,6 +695,7 @@ def normalize_item(item):
 
 def print_dry_run_item(item, matched_query=None):
     """Print one normalized item without sending a notification."""
+    print(fmt.to_plain_text(hardware_enricher.build_telegram_headline(item)))
     print(f"Title: {item['title']}")
     print(f"Price: {item['price']}")
     if matched_query:
@@ -687,7 +704,7 @@ def print_dry_run_item(item, matched_query=None):
     if item["image"]:
         print(f"Image: {item['image']}")
     for line in hardware_enricher.build_telegram_lines(item, matched_query):
-        print(line)
+        print(fmt.to_plain_text(line))
     print()
 
 
@@ -763,6 +780,7 @@ def process_item(
             normalized_item["image"],
             matched_query,
             extra_lines=extra_lines,
+            headline=hardware_enricher.build_telegram_headline(normalized_item),
         )
 
     if succeeded:
@@ -917,20 +935,23 @@ def classify_ram_hunt_candidate(item, max_price_eur=RAM_HUNT_DEFAULT_MAX_PRICE_E
 
 
 def ram_hunt_telegram_lines(candidate, max_price_eur, matched_query=None):
-    """Build concise, actionable Telegram notes for a RAM Hunt candidate."""
-    lines = [
-        "🧩 RAM HUNT — possible donor laptop",
-        f"Priority: {candidate['tier']}",
-        f"RAM found in listing: {candidate['ram_claim']}",
-        f"Reason: {candidate['reason']}",
-        f"Listing price cap: €{max_price_eur} (shipping/fees excluded)",
-        f"Confidence: {candidate['confidence']}",
-        "Before buying: check removable DDR4 SO-DIMM, number/size of modules, working condition, exact model and total cost with shipping/fees.",
-        "The listing text does not prove the RAM is present or working.",
+    """Build Telegram HTML lines for a RAM Hunt candidate; the first is the headline."""
+    return [
+        f"🧩 <b>RAM HUNT</b> · {fmt.esc(candidate['tier'])}",
+        *fmt.section("🧩 Possible donor laptop", [
+            f"RAM in listing: <b>{fmt.esc(candidate['ram_claim'])}</b>",
+            f"Why: {fmt.esc(candidate['reason'])}",
+            f"Confidence: {fmt.esc(candidate['confidence'])}",
+            f"Price cap: {fmt.euro(max_price_eur)} (excl. shipping/fees)",
+        ]),
+        *fmt.expandable("🔎 Before buying", [
+            "• removable DDR4 SO-DIMM",
+            "• number and size of the modules",
+            "• working condition and exact model",
+            "• total cost with shipping/fees",
+            fmt.italic("The listing text does not prove the RAM is present or working."),
+        ]),
     ]
-    if matched_query:
-        lines.insert(1, f"Search: {matched_query}")
-    return lines
 
 
 def process_hunt_item(
@@ -949,7 +970,7 @@ def process_hunt_item(
     """Process one listing of an independent hunt mode with its own ledger.
 
     ``classify`` receives a raw catalogue item and returns a candidate or None;
-    ``build_lines`` turns a candidate into notification lines.
+    ``build_lines`` turns a candidate into Telegram HTML lines, headline first.
     """
     normalized = normalize_item(raw_item)
     if not normalized or normalized["id"] in analyzed_items:
@@ -976,19 +997,21 @@ def process_hunt_item(
             print(f"{label.upper()} SKIPPED: {normalized['title']} — outside candidate rules\n")
         return True
 
-    extra_lines = build_lines(candidate)
+    headline, *extra_lines = build_lines(candidate)
     if dry_run:
+        print(fmt.to_plain_text(headline))
         print(f"{label.upper()} CANDIDATE: {normalized['title']}")
         print(f"Price: {normalized['price']}")
         print(f"URL: {normalized['url']}")
         for line in extra_lines:
-            print(line)
+            print(fmt.to_plain_text(line))
         print()
         succeeded = True
     else:
         succeeded = send_notifications(
             normalized["title"], normalized["price"], normalized["url"],
             normalized["image"], matched_query, extra_lines=extra_lines,
+            headline=headline,
         )
 
     if succeeded:
@@ -1155,35 +1178,38 @@ def classify_cpu_hunt_candidate(item, targets):
 
 
 def cpu_hunt_telegram_lines(candidate, matched_query=None):
-    """Build actionable Telegram notes for a CPU Hunt candidate."""
-    lines = [
-        "🔧 CPU HUNT — loose CPU for a mini-PC upgrade",
-        f"CPU: {candidate['cpu_name']} ({candidate['cores']} core / "
-        f"{candidate['threads']} thread · {candidate['tdp_w']} W)",
-        f"Price: €{candidate['price']} (cap €{candidate['cap']}; shipping/fees excluded)",
+    """Build Telegram HTML lines for a CPU Hunt candidate; the first is the headline."""
+    cpu = fmt.esc(candidate["cpu_name"])
+    rows = [
+        f"CPU: <b>{cpu}</b> · {candidate['cores']} core / {candidate['threads']} thread"
+        f" · {candidate['tdp_w']} W",
+        f"Price: <b>{fmt.euro(candidate['price'])}</b> (cap {fmt.euro(candidate['cap'])}, "
+        "excl. shipping/fees)",
     ]
     if candidate["platforms"]:
-        lines.append(
-            f"Offered in ({candidate['generation']}th-gen platforms): "
-            + ", ".join(candidate["platforms"])
+        rows.append(
+            f"Fits ({candidate['generation']}th gen): " + fmt.esc(", ".join(candidate["platforms"]))
         )
     if candidate["generation"] is not None and candidate["generation"] <= 7:
-        lines.append(
-            "⚠️ 6th/7th-gen part: only useful for an existing legacy unit (max 32 GB, 4 cores)"
-        )
-    lines.append(
-        f"Build estimate: €{candidate['build_estimate']} = base unit €{candidate['base_price']} "
-        f"+ this CPU €{candidate['price']} + RAM to 16 GB €{candidate['ram_budget']} "
-        "(base unit = cpu_hunt_base_price_eur, a typical i3/Pentium unit of the same generation)"
-    )
-    lines.append(
-        "Before buying: check the exact model/MTM lists this CPU (9th gen needs a recent BIOS "
-        "on 8th/9th-gen models), the 35 W cooler, fresh thermal paste, undamaged socket pins "
-        "and that it is not an ES/QS sample."
-    )
-    if matched_query:
-        lines.insert(1, f"Search: {matched_query}")
-    return lines
+        rows.append("⚠️ 6th/7th-gen part: only useful for an existing legacy unit (max 32 GB, 4 cores)")
+    return [
+        f"🔧 <b>CPU HUNT</b> · {cpu} · {fmt.euro(candidate['price'])}",
+        *fmt.section("🔧 Loose CPU for a mini-PC upgrade", rows),
+        *fmt.section("💰 Build estimate", [
+            f"Total: <b>{fmt.euro(candidate['build_estimate'])}</b> = base unit "
+            f"{fmt.euro(candidate['base_price'])} + this CPU {fmt.euro(candidate['price'])}"
+            f" + RAM to 16 GB {fmt.euro(candidate['ram_budget'])}",
+            "   " + fmt.italic(
+                "Base unit = cpu_hunt_base_price_eur, a typical i3/Pentium unit of the same generation"
+            ),
+        ]),
+        *fmt.expandable("🔎 Before buying", [
+            "• the exact model/MTM lists this CPU (9th gen needs a recent BIOS on 8th/9th-gen models)",
+            "• the 35 W cooler and fresh thermal paste",
+            "• undamaged socket pins",
+            "• not an ES/QS sample",
+        ]),
+    ]
 
 
 def process_cpu_hunt_queries(

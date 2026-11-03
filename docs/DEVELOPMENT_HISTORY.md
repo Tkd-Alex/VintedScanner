@@ -100,6 +100,7 @@ A standalone `hardware_enricher.py` was introduced and integrated into VintedSca
 - Normalized catalogue items now retain the listing description when available.
 - For a newly found listing, the scanner calls `hardware_enricher.enrich_item(...)` before building the Telegram message.
 - `hardware_enricher.build_telegram_lines(...)` adds a hardware section to the same Telegram alert.
+  (Since phase 7 it returns Telegram HTML lines, and `build_telegram_headline(...)` returns the decision line placed above the title; see section 13.)
 - The same enrichment is printed in `--dry-run` output.
 - A configurable `hardware_fetch_details` switch allows one normal listing-page fetch when the catalogue response does not include a useful description.
 - The page-fetch helper uses Python's standard HTML parser / JSON traversal rather than adding BeautifulSoup as a dependency. It has a 15-second timeout and the fetch failure is non-fatal: missing data stays missing and the alert can still be sent.
@@ -571,3 +572,19 @@ Decisions taken with the user:
 - A CPU Hunt mode was added for loose 8th/9th-gen T CPUs (and 6th/7th-gen ones with lower caps), because an i3/Pentium base plus a cheap i7-8700T or i5-9500T can beat a configured unit.
 
 Verification on 3 November 2026: 89 unit tests passed, and two consecutive live `--dry-run` scans ran with twelve brand-filtered queries, RAM Hunt and CPU Hunt enabled. The first scan took about 4.5 minutes: 86 alerts, all with a seller description, 45 filtered listings, no HTTP 429 at a 2 s page pause, 28 alerts whose sellers stated only "i5"/"i7" (scored with a tier estimate), 4 RAM Hunt and 6 CPU Hunt candidates. The second scan took 4 seconds and made no listing-page requests. These are snapshots of live data, not guarantees.
+
+---
+
+## 13. Phase 7 — Readable Telegram alerts (3 November 2026)
+
+The user found the alerts unreadable: about twenty lines of equal weight under a `──── HARDWARE ANALYSIS ────` banner, with the verdict buried in the middle, two raw URLs, recurring "Not identified" lines and a description cut mid-word. Of the three layouts proposed, the user picked the full restructure:
+
+- A decision line comes first: a marker for the verdict (🟢/🟡/🟠/🔴, ⚪ outside the target), then the score, the verdict and the upgrade score when there is one.
+- The title follows, then the price as `€120`, the links as *Open listing* / *Photo*, and the matched query. The listing photo is the link preview (`prefer_small_media`) instead of a raw URL.
+- The banner is gone. The body is split into short bold sections: Hardware, Cost, CPU upgrade and Score breakdown. The checklist and the seller description are `<blockquote expandable>` blocks, and the description is cut on a word boundary.
+- Lines without information are left out: an unidentified GPU, the generic AI note, an unknown vPro status, the "CPU upgrade not identified" line. The CPU note and the RAM-estimate note appear in their own section and are no longer repeated in the checklist.
+- RAM Hunt and CPU Hunt follow the same layout. Their line builders return the headline as the first line.
+
+Contract change: line builders now return **already-escaped Telegram HTML**, and `send_telegram_message` no longer escapes `extra_lines` (it still escapes the title, the price, the URLs and the query). Any new line must go through the `message_format` helpers. Dry runs print the same lines with the tags stripped.
+
+Verification: 93 unit tests passed. The example M900 Tiny listing renders as about 1,850 characters, well below Telegram's 4,096 limit. The example alert was then sent to the live Telegram group and accepted (HTTP 200), which confirms the HTML is valid; the photo preview for Vinted `.webp` images was left for the user to check on the phone.

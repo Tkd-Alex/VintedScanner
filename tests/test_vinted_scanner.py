@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 import unittest.mock
@@ -158,7 +159,30 @@ class NotificationTests(unittest.TestCase):
         self.assertEqual(call.kwargs["timeout"], scanner.REQUEST_TIMEOUT_SECONDS)
         self.assertIn("A &lt; B &amp; C", call.kwargs["params"]["text"])
         self.assertIn("a=1&amp;b=2", call.kwargs["params"]["text"])
-        self.assertIn("Matched query: gl.&lt;inet&gt;", call.kwargs["params"]["text"])
+        self.assertIn("🔍 <i>gl.&lt;inet&gt;</i>", call.kwargs["params"]["text"])
+        self.assertIn('href="https://example.test/item?a=1&amp;b=2"', call.kwargs["params"]["text"])
+        self.assertEqual(
+            json.loads(call.kwargs["params"]["link_preview_options"]), {"is_disabled": True}
+        )
+
+    @patch("vinted_scanner.requests.post")
+    def test_telegram_puts_headline_first_and_previews_the_photo(self, post):
+        post.return_value.raise_for_status.return_value = None
+        scanner.send_telegram_message(
+            "Title", "120.00 EUR", "https://example.test/item", "https://img.test/1.webp",
+            extra_lines=["", "<b>🖥 Hardware</b>"], headline="🔴 <b>51/100</b> · Weak",
+        )
+        params = post.call_args.kwargs["params"]
+        lines = params["text"].split("\n")
+        self.assertEqual(lines[0], "🔴 <b>51/100</b> · Weak")
+        self.assertEqual(lines[1], "<b>Title</b>")
+        self.assertIn("💶 <b>€120</b>", lines[2])
+        self.assertIn('<a href="https://img.test/1.webp">Photo</a>', lines[2])
+        # Body lines are already HTML and must not be escaped a second time.
+        self.assertIn("<b>🖥 Hardware</b>", params["text"])
+        preview = json.loads(params["link_preview_options"])
+        self.assertEqual(preview["url"], "https://img.test/1.webp")
+        self.assertTrue(preview["prefer_small_media"])
 
     @patch("vinted_scanner.send_email", return_value=False)
     def test_all_configured_notifications_must_succeed(self, send_email):
@@ -619,8 +643,9 @@ class RamHuntTests(unittest.TestCase):
             self.assertEqual(analyzed, {"6"})
             self.assertEqual(database_path.read_text(encoding="utf-8"), "6\n")
         send_notifications.assert_called_once()
+        self.assertIn("RAM HUNT", send_notifications.call_args.kwargs["headline"])
         extra_lines = send_notifications.call_args.kwargs["extra_lines"]
-        self.assertTrue(any("RAM HUNT" in line for line in extra_lines))
+        self.assertTrue(any("16 GB" in line for line in extra_lines))
 
     def test_ram_hunt_ignores_portable_non_computers_and_storage_sizes(self):
         lamp = {
@@ -658,7 +683,8 @@ class CpuHuntTests(unittest.TestCase):
         self.assertIn("Lenovo ThinkCentre M920q Tiny", candidate["platforms"])
         self.assertNotIn("Lenovo ThinkCentre M710q Tiny", candidate["platforms"])
         lines = scanner.cpu_hunt_telegram_lines(candidate, "i7-8700T")
-        self.assertTrue(any(line.startswith("Build estimate: €") for line in lines))
+        self.assertTrue(lines[0].startswith("🔧 <b>CPU HUNT</b>"))
+        self.assertTrue(any(line.startswith("Total: <b>€") for line in lines))
 
     def test_short_bare_cpu_title_is_a_candidate(self):
         candidate = scanner.classify_cpu_hunt_candidate(self.item("intel i5-9500t", "55"), self.targets)
@@ -719,4 +745,4 @@ class CpuHuntTests(unittest.TestCase):
             self.assertFalse(failed)
             self.assertEqual(ledger.read_text(encoding="utf-8").split(), ["77", "78"])
         send_notifications.assert_called_once()
-        self.assertTrue(any("CPU HUNT" in line for line in send_notifications.call_args.kwargs["extra_lines"]))
+        self.assertIn("CPU HUNT", send_notifications.call_args.kwargs["headline"])
