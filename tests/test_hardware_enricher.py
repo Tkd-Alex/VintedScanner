@@ -275,6 +275,18 @@ class HardwareAnalysisTests(unittest.TestCase):
         hp = enricher.analyze_hardware("HP EliteDesk 800 G5 Mini i5-9500 16GB RAM")
         self.assertEqual(hp["cpu"], "Intel Core i5-9500")
 
+    def test_upgrade_message_distinguishes_missing_cpu_price_and_unknown_ram(self):
+        unknown_ram = enricher.analyze_hardware(
+            "Lenovo ThinkCentre M700 Tiny", price="100 EUR", cpu_upgrade_costs_eur={"i76700t": 68}
+        )
+        lines = enricher.build_telegram_lines({"title": "x", "hardware_analysis": unknown_ram})
+        self.assertTrue(any("installed RAM unknown" in line for line in lines))
+        self.assertFalse(any("price not configured" in line for line in lines))
+
+        no_price = enricher.analyze_hardware("Lenovo ThinkCentre M700 Tiny Celeron G3900T 4GB RAM", price="60 EUR")
+        lines = enricher.build_telegram_lines({"title": "x", "hardware_analysis": no_price})
+        self.assertTrue(any("CPU upgrade price not configured" in line for line in lines))
+
 
 if __name__ == "__main__":
     unittest.main()

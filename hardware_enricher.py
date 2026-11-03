@@ -1212,8 +1212,10 @@ def build_telegram_lines(item: dict[str, Any], matched_query: str | None = None)
             f"📈 Upgrade-opportunity score: {analysis['upgrade_score']}/100 "
             f"(candidate CPU + estimated RAM to 16 GB; price component based on configured costs)"
         )
-    elif cpu_upgrade.get("needed"):
+    elif cpu_upgrade.get("needed") and cpu_upgrade.get("cost_eur") is None:
         lines.append("📈 Upgrade-opportunity score: pending — CPU upgrade price not configured")
+    elif cpu_upgrade.get("needed"):
+        lines.append("📈 Upgrade-opportunity score: pending — installed RAM unknown, build cost not estimated")
     lines.append(f"⚙️ Proxmox suitability: {analysis.get('verdict')}")
     if analysis.get("total_to_16_eur") is not None:
         lines.append(f"💶 Total estimate with 16 GB: €{analysis['total_to_16_eur']:.2f} (listing + estimated RAM; shipping/buyer fee excluded)")
@@ -1225,8 +1227,10 @@ def build_telegram_lines(item: dict[str, Any], matched_query: str | None = None)
         lines.append("💶 Total estimate with 32 GB: to verify RAM configuration")
     if analysis.get("total_to_16_with_cpu_eur") is not None:
         lines.append(f"🧾 Build estimate: 16 GB + CPU upgrade = €{analysis['total_to_16_with_cpu_eur']:.2f} (listing + configured upgrade budgets)")
+    elif cpu_upgrade.get("needed") and cpu_upgrade.get("cost_eur") is None:
+        lines.append("🧾 Build estimate with CPU upgrade: incomplete — add a CPU price to hardware_cpu_upgrade_costs_eur")
     elif cpu_upgrade.get("needed"):
-        lines.append("🧾 Build estimate with CPU upgrade: incomplete — add a CPU price or verify RAM cost")
+        lines.append("🧾 Build estimate with CPU upgrade: incomplete — installed RAM unknown")
     if analysis.get("total_to_32_with_cpu_eur") is not None:
         lines.append(f"🧾 Build estimate: 32 GB + CPU upgrade = €{analysis['total_to_32_with_cpu_eur']:.2f}")
     lines.append(f"🤖 AI: {analysis.get('ai_note')}")
