@@ -518,7 +518,7 @@ class RamHuntTests(unittest.TestCase):
         }
         candidate = scanner.classify_ram_hunt_candidate(item, 100)
         self.assertIsNotNone(candidate)
-        self.assertIn("RAM non specificata", candidate["tier"])
+        self.assertIn("RAM not specified", candidate["tier"])
 
     def test_ram_hunt_flags_32gb_ddr4_listing_under_100_without_fault_claim(self):
         item = {
@@ -528,7 +528,7 @@ class RamHuntTests(unittest.TestCase):
         }
         candidate = scanner.classify_ram_hunt_candidate(item, 100)
         self.assertIsNotNone(candidate)
-        self.assertIn("32 GB dichiarati", candidate["tier"])
+        self.assertIn("32 GB stated", candidate["tier"])
 
     def test_ram_hunt_rejects_over_budget_mini_pc_and_explicit_8gb_donor(self):
         over_budget = {

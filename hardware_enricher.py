@@ -601,22 +601,22 @@ def _upgrade_estimates(
     if ram_gb is None:
         upgrade_16 = None
         upgrade_32 = None
-        note = "RAM non indicata: costo upgrade da verificare"
+        note = "RAM not stated: upgrade cost to be verified"
     else:
         if ram_gb >= 16:
             upgrade_16 = 0.0
         elif ram_gb == 8:
             # User-supplied assumption: add one compatible 8 GB module.
             upgrade_16 = float(ram_8gb_upgrade_eur)
-            note = "16 GB stimati: ipotesi di aggiunta 1×8 GB compatibile"
+            note = "16 GB estimate: assumes adding 1×8 GB compatible module"
         elif ram_gb < 8:
             # A 4 GB base may need a replacement module or a kit; keep the same
             # planning allowance, but mark it as a rough estimate, not a fit claim.
             upgrade_16 = float(ram_8gb_upgrade_eur)
-            note = "16 GB stimati con budget indicativo: per RAM iniziale sotto 8 GB verificare kit/slot e compatibilità"
+            note = "16 GB estimate is a rough budget: with less than 8 GB installed, check kit, slots and compatibility"
         else:
             upgrade_16 = float(ram_8gb_upgrade_eur)
-            note = "16 GB stimati: budget indicativo, verificare disposizione e compatibilità dei moduli"
+            note = "16 GB estimate is a rough budget: check module layout and compatibility"
         upgrade_32 = 0.0 if ram_gb >= 32 else float(ram_32gb_kit_eur)
 
     return {
@@ -677,9 +677,9 @@ def analyze_hardware(
     if known_cores is not None:
         cpu_detail = f"{known_cores} core / {known_threads} thread"
         if cpu.get("tdp_w"):
-            cpu_detail += f" · TDP nominale {cpu['tdp_w']} W"
+            cpu_detail += f" · nominal TDP {cpu['tdp_w']} W"
     else:
-        cpu_detail = "Modello non riconosciuto con sufficiente certezza"
+        cpu_detail = "Model not recognized with enough certainty"
 
     pricing = _upgrade_estimates(
         ram_gb, price, ram_8gb_upgrade_eur, ram_32gb_kit_eur
@@ -730,36 +730,36 @@ def analyze_hardware(
             )
             upgrade_score = upgrade_score_parts["total"]
     if non_system:
-        verdict = "Fuori target: ricambio, accessorio o lotto"
+        verdict = "Out of target: spare part, accessory or lot"
     elif not target_system:
-        verdict = "Fuori target: serve EliteDesk Mini, ThinkCentre Tiny o OptiPlex Micro"
+        verdict = "Out of target: requires EliteDesk/ProDesk Mini, ThinkCentre Tiny or OptiPlex Micro"
     elif score >= 78:
-        verdict = "Candidato interessante"
+        verdict = "Strong candidate"
     elif score >= 58:
-        verdict = "Da valutare"
+        verdict = "Worth evaluating"
     elif cpu_upgrade.get("needed") and cpu_upgrade.get("candidate_cores"):
         if known_cores is not None and cpu_upgrade["candidate_cores"] > known_cores:
-            verdict = "Base economica potenzialmente aggiornabile"
+            verdict = "Cheap base, potentially upgradeable"
         else:
-            verdict = "Debole come configurazione attuale; upgrade da verificare"
+            verdict = "Weak as configured; upgrade to be verified"
     else:
-        verdict = "Debole per il tuo obiettivo Proxmox"
+        verdict = "Weak for a Proxmox node"
 
     missing = []
     if non_system:
-        missing.append("fuori target: ricambio, accessorio o lotto di più unità")
+        missing.append("out of target: spare part, accessory or multi-unit lot")
     elif not target_system:
-        missing.append("fuori target: famiglia/chassis non confermati come Mini/Tiny/Micro richiesto")
+        missing.append("out of target: family/chassis not confirmed as the required Mini/Tiny/Micro")
     if not cpu_name:
-        missing.append("CPU esatta/core da verificare")
+        missing.append("exact CPU/core count to be verified")
     if ram_gb is None:
-        missing.append("RAM installata da verificare")
+        missing.append("installed RAM to be verified")
     if not storage:
-        missing.append("tipo e capacità storage da verificare")
+        missing.append("storage type and capacity to be verified")
     if not form_factor:
-        missing.append("formato Mini/Tiny/Micro da confermare")
-    missing.append("verificare RAM massima, slot liberi, alimentatore e stato reale")
-    missing.append("verificare espansione storage e compatibilità di eventuali upgrade")
+        missing.append("Mini/Tiny/Micro form factor to be confirmed")
+    missing.append("check maximum RAM, free slots, power adapter and actual condition")
+    missing.append("check storage expansion and compatibility of any upgrade")
     if pricing.get("ram_upgrade_note"):
         missing.append(pricing["ram_upgrade_note"])
 
@@ -788,7 +788,7 @@ def analyze_hardware(
         "price": price,
         **pricing,
         "description": re.sub(r"\s+", " ", description).strip()[:MAX_DESCRIPTION_CHARS],
-        "spec_source": "specifiche di riferimento locali + testo annuncio; non è un test del dispositivo",
+        "spec_source": "local reference specs + listing text; not a device test",
     }
 
 
@@ -892,14 +892,14 @@ def _score(
 
 def _ai_note(gpu: str | None, discrete_gpu: bool, cpu_name: str | None) -> str:
     if discrete_gpu:
-        return f"GPU dedicata citata ({gpu}); verificare VRAM e compatibilità del telaio/alimentazione."
+        return f"Dedicated GPU mentioned ({gpu}); check VRAM and chassis/power compatibility."
     if gpu and re.search(r"Radeon\s+(?:680M|780M|890M|880M)", gpu, re.I):
-        return "iGPU relativamente capace per esperimenti leggeri; non equivale a una GPU dedicata con VRAM."
+        return "Fairly capable iGPU for light experiments; not equivalent to a dedicated GPU with VRAM."
     if gpu and re.search(r"(?:UHD|HD Graphics|N100)", gpu, re.I):
-        return "Grafica integrata di base; AI locale soprattutto su CPU e con modelli piccoli."
+        return "Basic integrated graphics; local AI mostly on CPU with small models."
     if cpu_name:
-        return "Nessuna GPU dedicata confermata; per AI locale conta molto il modello specifico e la RAM."
-    return "Dati insufficienti per stimare l'accelerazione AI; GPU e VRAM non confermate."
+        return "No dedicated GPU confirmed; for local AI the exact model and RAM matter most."
+    return "Not enough data to estimate AI acceleration; GPU and VRAM not confirmed."
 
 
 def enrich_item(

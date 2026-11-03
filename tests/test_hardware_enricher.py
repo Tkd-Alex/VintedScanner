@@ -35,7 +35,7 @@ class HardwareAnalysisTests(unittest.TestCase):
         self.assertEqual(result["cpu"], "Intel Core i7-9700T")
         self.assertEqual(result["cores"], 8)
         self.assertEqual(result["threads"], 8)
-        self.assertEqual(result["cpu_detail"], "8 core / 8 thread · TDP nominale 35 W")
+        self.assertEqual(result["cpu_detail"], "8 core / 8 thread · nominal TDP 35 W")
 
     def test_amd_ryzen_7_6800h_parses_integrated_gpu(self):
         result = enricher.analyze_hardware("GEEKOM A6 Ryzen 7 6800H 32GB 1TB SSD")
@@ -52,7 +52,7 @@ class HardwareAnalysisTests(unittest.TestCase):
     def test_unknown_cpu_is_not_invented(self):
         result = enricher.analyze_hardware("Mini PC 16GB RAM 512GB SSD")
         self.assertIsNone(result["cpu"])
-        self.assertIn("CPU esatta/core da verificare", result["missing"])
+        self.assertIn("exact CPU/core count to be verified", result["missing"])
 
     def test_cpu_has_half_of_total_score_and_outweighs_ram_difference(self):
         stronger = enricher.analyze_hardware(
@@ -136,7 +136,7 @@ class HardwareAnalysisTests(unittest.TestCase):
         result = enricher.analyze_hardware("HP EliteDesk 800 G5 Mini i5-9500 16GB RAM 512GB SSD")
         self.assertEqual(result["cpu"], "Intel Core i5-9500")
         self.assertEqual(result["cores"], 6)
-        self.assertEqual(result["cpu_detail"], "6 core / 6 thread · TDP nominale 65 W")
+        self.assertEqual(result["cpu_detail"], "6 core / 6 thread · nominal TDP 65 W")
 
     def test_html_is_escaped_by_caller_and_lines_include_analysis(self):
         item = {

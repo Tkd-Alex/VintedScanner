@@ -770,34 +770,34 @@ def classify_ram_hunt_candidate(item, max_price_eur=RAM_HUNT_DEFAULT_MAX_PRICE_E
 
     if has_32:
         return {
-            "tier": "ALTA — 32 GB dichiarati",
-            "reason": "L'annuncio menziona 32 GB o 2×16 GB; la configurazione reale va verificata.",
-            "ram_claim": "32 GB dichiarati" + (" DDR4" if has_ddr4 else "; generazione da verificare"),
-            "confidence": "alta sul dato dichiarato, non sul funzionamento",
+            "tier": "HIGH — 32 GB stated",
+            "reason": "The listing mentions 32 GB or 2×16 GB; the actual configuration must be verified.",
+            "ram_claim": "32 GB stated" + (" DDR4" if has_ddr4 else "; generation to be verified"),
+            "confidence": "high for the stated figure, not for working condition",
         }
 
     if damaged and has_16 and has_ddr4:
         return {
-            "tier": "MEDIA — 16 GB DDR4 dichiarati",
-            "reason": "Possibile recupero di moduli DDR4; quantità di moduli e capacità dei singoli banchi da verificare.",
-            "ram_claim": "16 GB DDR4 dichiarati",
-            "confidence": "media; moduli e funzionamento non verificati",
+            "tier": "MEDIUM — 16 GB DDR4 stated",
+            "reason": "Possible DDR4 module recovery; number and size of modules to be verified.",
+            "ram_claim": "16 GB DDR4 stated",
+            "confidence": "medium; modules and working condition not verified",
         }
 
     if damaged and has_16:
         return {
-            "tier": "DA VERIFICARE — 16 GB dichiarati",
-            "reason": "La capacità è menzionata, ma il tipo di RAM non è confermato come DDR4.",
-            "ram_claim": "16 GB dichiarati; generazione da verificare",
-            "confidence": "bassa finché non viene verificato il tipo di RAM",
+            "tier": "TO VERIFY — 16 GB stated",
+            "reason": "The capacity is mentioned, but the RAM type is not confirmed as DDR4.",
+            "ram_claim": "16 GB stated; generation to be verified",
+            "confidence": "low until the RAM type is verified",
         }
 
     if damaged and not (has_16 or has_32):
         return {
-            "tier": "DA VERIFICARE — RAM non specificata",
-            "reason": "Portatile guasto entro budget; potrebbe essere un donatore, ma capacità e tipo di RAM non sono dichiarati.",
-            "ram_claim": "Capacità/tipo RAM non specificati",
-            "confidence": "bassa; chiedere al venditore prima di acquistare",
+            "tier": "TO VERIFY — RAM not specified",
+            "reason": "Broken laptop within budget; possible donor, but RAM size and type are not stated.",
+            "ram_claim": "RAM size/type not specified",
+            "confidence": "low; ask the seller before buying",
         }
 
     return None
@@ -806,17 +806,17 @@ def classify_ram_hunt_candidate(item, max_price_eur=RAM_HUNT_DEFAULT_MAX_PRICE_E
 def ram_hunt_telegram_lines(candidate, max_price_eur, matched_query=None):
     """Build concise, actionable Telegram notes for a RAM Hunt candidate."""
     lines = [
-        "🧩 RAM HUNT — possibile portatile donatore",
-        f"Priorità: {candidate['tier']}",
-        f"RAM rilevata nell'annuncio: {candidate['ram_claim']}",
-        f"Motivo: {candidate['reason']}",
-        f"Limite prezzo annuncio: €{max_price_eur} (spedizione/commissioni escluse)",
-        f"Affidabilità: {candidate['confidence']}",
-        "Prima di comprare: verifica DDR4 SO-DIMM rimovibile, numero/capacità dei moduli, funzionamento, modello esatto e costo totale con spedizione/commissioni.",
-        "Il testo dell'annuncio non prova che la RAM sia presente o funzionante.",
+        "🧩 RAM HUNT — possible donor laptop",
+        f"Priority: {candidate['tier']}",
+        f"RAM found in listing: {candidate['ram_claim']}",
+        f"Reason: {candidate['reason']}",
+        f"Listing price cap: €{max_price_eur} (shipping/fees excluded)",
+        f"Confidence: {candidate['confidence']}",
+        "Before buying: check removable DDR4 SO-DIMM, number/size of modules, working condition, exact model and total cost with shipping/fees.",
+        "The listing text does not prove the RAM is present or working.",
     ]
     if matched_query:
-        lines.insert(1, f"Ricerca: {matched_query}")
+        lines.insert(1, f"Search: {matched_query}")
     return lines
 
 
