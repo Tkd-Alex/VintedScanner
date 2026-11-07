@@ -9,13 +9,17 @@ With this script, you no longer need to manually open the Vinted app and search 
 ## Features
 
 - **Automated Search**: The script performs searches on Vinted according to your custom queries.
-- **Optional CPU Hunt mode**: Disabled by default; finds loose low-power CPUs (e.g. i7-8700T, i5-9500T) under a per-model price cap and lists the mini PCs they fit, with its own deduplication database.
-- **Separate RAM Hunt mode**: Enabled by default; finds under-€100 damaged laptops and listings mentioning 16/32 GB DDR4, for possible memory recovery. It has its own deduplication database and does not replace or filter the normal mini-PC notifications.
+- **Optional CPU Hunt mode**: Disabled by default; finds loose low-power CPUs (e.g. i7-8700T, i5-9500T) under a per-model price cap and lists the mini PCs they fit, tracked separately from the mini-PC alerts.
+- **Separate RAM Hunt mode**: Enabled by default; finds under-€100 damaged laptops and listings mentioning 16/32 GB DDR4, for possible memory recovery. It is tracked separately and does not replace or filter the normal mini-PC notifications.
 - **Automatic Notifications**: Receive notifications through:
   - **Email**
   - **Slack**
   - **Telegram**
 - **Duplicate Prevention**: The script logs items that have already been analyzed, so you won't receive multiple notifications for the same item.
+- **SQLite history**: Every listing the scanner looks at and every run is stored in
+  `vinted_scanner.db`, with the content of each alert as structured data.
+- **Dashboard**: A local, shop-style web page with the market overview, all alerts
+  per mode and the run history.
 - **Interactive Query Builder**: Discover localized categories and contextual
   filters without manually looking up Vinted IDs.
 - **Periodic Execution**: The script is designed to be executed periodically, such as through a cron job.
@@ -205,7 +209,7 @@ If a delivery fails, the item is retried during the next execution. When more
 than one channel is enabled, this may repeat a notification on a channel that
 had already succeeded.
 
-For a new installation, initialize the local item database before enabling
+For a new installation, initialize the local database before enabling
 notifications:
 
 ```bash
@@ -227,9 +231,10 @@ python3 vinted_scanner.py --dry-run
 ```
 
 New items and their matching search text are printed in the terminal and are
-still saved in the local `vinted_items.txt` database. Consequently, they will
-be considered already analyzed during subsequent executions. This runtime
-file is created automatically on first use and is excluded from Git.
+still saved in the local `vinted_scanner.db` database (with status `dry_run`).
+Consequently, they will be considered already analyzed during subsequent
+executions. This runtime file is created automatically on first use and is
+excluded from Git.
 
 To display all available command-line options:
 
@@ -243,7 +248,7 @@ This tailored version adds a local hardware analysis to each relevant Telegram a
 
 The platform part comes from a local table of the supported models (`PLATFORM_PROFILES` in `hardware_enricher.py`): CPU generation, official maximum RAM, PCIe riser slot (ThinkCentre M720q/M920q), the highest CPU class the chassis ships with, and whether the chipset supports Intel vPro/AMT. Remote power control and console through AMT matter for a node without anyone on site, so a vPro chipset paired with a vPro CPU earns the most platform points; a vPro chipset with a non-vPro CPU (e.g. i5-8400T, i3) is reported as such. 6th/7th-gen platforms are still notified, with fewer platform points and a "legacy platform" warning, and are never labelled "Strong candidate". When the CPU model is not stated, the score uses a typical CPU for the platform and the tier named in the title (i3/i5/i7/Celeron), discounted and marked as an estimate. On 35 W-only chassis (Dell OptiPlex Micro, Lenovo 6th/7th-gen Tiny, HP ProDesk 400 Mini) a listed non-T CPU such as `i7 8700` is read as its T variant, with a note to verify.
 
-By default, strict filtering accepts **HP EliteDesk/ProDesk Mini, Lenovo ThinkCentre Tiny, and Dell OptiPlex Micro** listings. Generic mini PCs, Geekom models, ordinary SFF desktops, and barebones are skipped. Spare parts, accessories and multi-unit lots are skipped from the title (e.g. `ricambi`, `pièces détachées`, `Lot de 5`); component words such as `antenna`, `ventola` or `staffa` exclude a title only when it names no CPU and no RAM size. One model-specific exception is Lenovo ThinkCentre M700: Lenovo's PSREF identifies it as a 1L Tiny chassis, so listings that call it `M700 USFF` are accepted when the M700 model and USFF/Tiny wording are both present. Filtered results are not written to the notified-items database. They are recorded in `vinted_filtered_items.txt` together with the filter-rule version, so they are not re-fetched on every run but are reconsidered automatically after a rule change. When a listing title does not even name a supported family (ThinkCentre, EliteDesk, ProDesk, OptiPlex), it is rejected from the title alone, without requesting its page.
+By default, strict filtering accepts **HP EliteDesk/ProDesk Mini, Lenovo ThinkCentre Tiny, and Dell OptiPlex Micro** listings. Generic mini PCs, Geekom models, ordinary SFF desktops, and barebones are skipped. Spare parts, accessories and multi-unit lots are skipped from the title (e.g. `ricambi`, `pièces détachées`, `Lot de 5`); component words such as `antenna`, `ventola` or `staffa` exclude a title only when it names no CPU and no RAM size. One model-specific exception is Lenovo ThinkCentre M700: Lenovo's PSREF identifies it as a 1L Tiny chassis, so listings that call it `M700 USFF` are accepted when the M700 model and USFF/Tiny wording are both present. Filtered results are not counted as notified. They are stored in the database with status `filtered` and the filter-rule version, so they are not re-fetched on every run but are reconsidered automatically after a rule change. When a listing title does not even name a supported family (ThinkCentre, EliteDesk, ProDesk, OptiPlex), it is rejected from the title alone, without requesting its page.
 
 The scanner also adds broad model discovery searches by default (ThinkCentre M700/M710/M720/M920/M70q/M90q and Tiny, EliteDesk Mini and 800 G4, ProDesk Mini, OptiPlex Micro and 7060). They are limited to the desktop-computer catalogue and to the `hardware_discovery_price_from`/`hardware_discovery_price_to` range (default €60–400). They are additive to the user's custom searches and can be disabled with `hardware_add_discovery_queries = False`. **Every new listing that passes the chassis filter is notified regardless of its score**; the score is informational only.
 
@@ -291,7 +296,7 @@ If Telegram itself cannot be reached (for example while the network is down), th
 
 ### Automation with Cron
 
-Before scheduling the scanner, run `python3 vinted_scanner.py --dry-run` once. It records the listings currently online in `vinted_items.txt`, so the first scheduled run only notifies new listings instead of sending dozens of messages at once.
+Before scheduling the scanner, run `python3 vinted_scanner.py --dry-run` once. It records the listings currently online in `vinted_scanner.db`, so the first scheduled run only notifies new listings instead of sending dozens of messages at once.
 
 To run the script periodically, you can set up a cron job. For example, to run the script every hour:
 
@@ -309,9 +314,78 @@ This will run the script every hour and log the output to `logfile.log`.
 
 ### Logging
 
-Logs are stored next to the script in `vinted_scanner.log`. The local item
-database is also resolved relative to the script, so both paths remain stable
+Logs are stored next to the script in `vinted_scanner.log`. The SQLite
+database `vinted_scanner.db` is also resolved relative to the script, so both paths remain stable
 when the scanner is started by cron.
+
+### Database
+
+The scanner keeps its state in `vinted_scanner.db` (SQLite, next to the script,
+excluded from Git). It replaces the old text files `vinted_items.txt`,
+`vinted_ram_hunt_items.txt`, `vinted_cpu_hunt_items.txt` and
+`vinted_filtered_items.txt`: on the first run their IDs are imported once, so
+nothing is notified twice, and the files are left on disk untouched. You can
+delete them yourself afterwards.
+
+The database holds:
+
+- **listings**: one row per listing and mode (mini PC, RAM Hunt, CPU Hunt) with
+  its outcome: `notified`, `dry_run`, `failed` (alert not delivered, retried
+  on the next run), `filtered` (outside the target chassis, re-checked after a
+  filter-rule change) or `ignored` (not a RAM/CPU Hunt candidate). Alerted
+  listings also store everything the Telegram message said: score and verdict,
+  CPU, RAM, disk, platform and generation, cost estimates, RAM Hunt tier, CPU
+  Hunt build estimate, and every section of the message.
+- **runs**: start time, duration, result, per-mode counters (searches,
+  listings, new, matches, notified), problems and the summary text.
+
+Inspect it with any SQLite tool, for example
+`sqlite3 vinted_scanner.db "select title, price_eur, score from listings where status = 'notified'"`.
+
+### Restoring history from Telegram
+
+Alerts sent before the database existed can be rebuilt from the Telegram chat:
+
+1. In Telegram Desktop, open the alert chat, then **⋮ → Export chat history**.
+   Untick photos and other media, choose the format **Machine-readable JSON** and
+   export. Telegram writes a `result.json` file.
+2. Import it:
+
+   ```bash
+   python3 telegram_import.py path/to/result.json            # updates vinted_scanner.db
+   python3 telegram_import.py path/to/result.json --dry-run  # only report what it finds
+   ```
+
+Alerts in the current layout (headline such as `🔴 51/100 · Weak for a Proxmox
+node`, and the RAM Hunt and CPU Hunt alerts) become notified listings with all
+their details; end-of-run summaries, including those inside a "Delivered late"
+message, become runs. Messages in the older alert format are skipped and
+counted. The import can be repeated safely: nothing is duplicated. Keep the
+export out of Git; it contains your chat history.
+
+### Dashboard
+
+```bash
+python3 dashboard.py                 # http://127.0.0.1:8000
+python3 dashboard.py --port 8080 --db /path/to/vinted_scanner.db
+```
+
+The dashboard is a read-only page served with Python's standard library (no
+extra dependencies). It has five sections:
+
+- **Overview**: how many mini PCs were alerted and what a 32 GB node costs,
+  the asking prices of each platform on a common scale (or the price once
+  upgraded to 32 GB), the best value, cheapest 32 GB and highest-score
+  listings, and a summary per CPU generation.
+- **Mini PC**, **RAM** and **CPU**: every alert as a shop catalogue with photos,
+  filters (platform, generation, verdict, tier, CPU, price), sorting, and a
+  detail panel with all the information from the alert. The status filter also
+  shows listings that were filtered out, not delivered or not a candidate.
+- **Runs**: the health of the latest runs at a glance, then each run with its
+  counters per mode, a link to the alerts it sent and its problems.
+
+It listens on `127.0.0.1` only. Use `--host 0.0.0.0` to open it to your local
+network, for example on the machine where the cron job runs; there is no login.
 
 ### Tests
 
@@ -343,8 +417,8 @@ This project is licensed under the [GNU General Public License v3.0](LICENSE).
 
 ## RAM Hunt mode
 
-RAM Hunt runs alongside the normal mini-PC search and uses a separate local database,
-`vinted_ram_hunt_items.txt`. It does **not** use the strict EliteDesk Mini /
+RAM Hunt runs alongside the normal mini-PC search and keeps its own list of
+analyzed listings in the database. It does **not** use the strict EliteDesk Mini /
 ThinkCentre Tiny / OptiPlex Micro filter and it does not change normal mini-PC
 notifications. RAM Hunt notifications are sent through the same configured channel
 (the provided sample configuration selects Telegram only).
@@ -365,8 +439,8 @@ final cost including shipping and marketplace fees. A known 4/8 GB-only listing 
 listings identified as DDR3 are filtered out. The RAM size is read with the same parser as
 the hardware analysis, so `4GB RAM / 32GB eMMC` counts as 4 GB. The word `portatile` alone
 is not enough (it also means "portable"): such listings need a computer hint such as a
-brand, CPU, RAM or SSD. The separate database prevents duplicate
-RAM Hunt alerts; ordinary mini-PC notifications keep using `vinted_items.txt`. As with the
+brand, CPU, RAM or SSD. Its separate list of analyzed listings prevents duplicate
+RAM Hunt alerts without affecting mini-PC notifications. As with the
 existing scanner, `--dry-run` records analyzed IDs, so listings shown during a dry run will
 not notify again on the next run.
 
@@ -406,7 +480,7 @@ of the same generation) + the CPU + the RAM-to-16 GB budget. 6th/7th-gen parts c
 a legacy warning: they only make sense for a unit you already own or can buy very
 cheaply. Before buying, check that the exact model/MTM lists the CPU (9th-gen parts
 need a recent BIOS on 8th/9th-gen models), the 35 W cooler and the socket. CPU Hunt
-uses its own `vinted_cpu_hunt_items.txt` database.
+keeps its own list of analyzed listings in the database.
 
 ### Upgrade references
 
