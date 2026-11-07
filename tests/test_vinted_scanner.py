@@ -7,7 +7,31 @@ from unittest.mock import Mock, patch
 
 import requests
 
+import storage
 import vinted_scanner as scanner
+
+
+class TempStoreMixin:
+    """Point the scanner at a temporary SQLite store."""
+
+    def setUp(self):
+        super().setUp()
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.store = storage.Store(Path(directory.name) / "test.db")
+        self.addCleanup(self.store.close)
+        patcher = patch.object(scanner, "store", self.store)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def listing(self, item_id, mode="mini_pc"):
+        return self.store.db.execute(
+            "SELECT * FROM listings WHERE mode = ? AND item_id = ?", (mode, str(item_id))
+        ).fetchone()
+
+    def status(self, item_id, mode="mini_pc"):
+        row = self.listing(item_id, mode)
+        return row["status"] if row else None
 
 
 class ConfigurationTests(unittest.TestCase):
@@ -79,24 +103,21 @@ class ConfigurationTests(unittest.TestCase):
 
 
 class DatabaseTests(unittest.TestCase):
-    def test_load_creates_missing_database_and_returns_a_set(self):
+    def test_open_store_imports_legacy_ledgers_and_loads_seen_ids(self):
         with tempfile.TemporaryDirectory() as directory:
-            database_path = Path(directory) / "items.txt"
-
-            items = scanner.load_analyzed_items(database_path)
-
-            self.assertEqual(items, set())
-            self.assertTrue(database_path.exists())
-
-    def test_load_deduplicates_item_ids(self):
-        with tempfile.TemporaryDirectory() as directory:
-            database_path = Path(directory) / "items.txt"
-            database_path.write_text("123\n123\n456\n", encoding="utf-8")
-
-            self.assertEqual(
-                scanner.load_analyzed_items(database_path),
-                {"123", "456"},
-            )
+            directory = Path(directory)
+            (directory / "items.txt").write_text("123\n123\n456\n", encoding="utf-8")
+            version = scanner.hardware_enricher.FILTER_RULES_VERSION
+            (directory / "filtered.txt").write_text(f"{version}:7\nold:8\n", encoding="utf-8")
+            with patch.object(scanner, "DATABASE_PATH", directory / "test.db"), patch.object(
+                scanner, "LEGACY_LEDGER_PATHS", {"mini_pc": directory / "items.txt"}
+            ), patch.object(scanner, "LEGACY_FILTERED_PATH", directory / "filtered.txt"):
+                database = scanner.open_store()
+                with patch.object(scanner, "store", database):
+                    seen = scanner.load_seen_ids()
+                database.close()
+        self.assertEqual(seen["mini_pc"], {"123", "456", "7"})
+        self.assertEqual((seen["ram"], seen["cpu"]), (set(), set()))
 
 
 class NotificationTests(unittest.TestCase):
@@ -308,7 +329,7 @@ class CatalogueTests(unittest.TestCase):
         )
 
 
-class ItemProcessingTests(unittest.TestCase):
+class ItemProcessingTests(TempStoreMixin, unittest.TestCase):
     item = {
         "id": 123,
         "title": "Lenovo ThinkCentre M920q Tiny i5-8600T 16GB RAM 256GB SSD",
@@ -320,24 +341,15 @@ class ItemProcessingTests(unittest.TestCase):
 
     @patch("vinted_scanner.send_notifications", return_value=False)
     def test_failed_notification_does_not_save_item(self, send_notifications):
-        with tempfile.TemporaryDirectory() as directory:
-            database_path = Path(directory) / "items.txt"
-            database_path.touch()
-            analyzed_items = set()
+        seen_ids = set()
+        succeeded = scanner.process_item(self.item, seen_ids, dry_run=False, matched_query="gl.inet")
 
-            succeeded = scanner.process_item(
-                self.item,
-                analyzed_items,
-                dry_run=False,
-                database_path=database_path,
-                matched_query="gl.inet",
-            )
-
-            self.assertFalse(succeeded)
-            self.assertEqual(database_path.read_text(encoding="utf-8"), "")
-            self.assertEqual(analyzed_items, set())
-            send_notifications.assert_called_once()
-            self.assertEqual(send_notifications.call_args.args[-1], "gl.inet")
+        self.assertFalse(succeeded)
+        self.assertEqual(self.status(123), "failed")
+        self.assertEqual(self.store.seen_ids("mini_pc"), set())
+        self.assertEqual(seen_ids, set())
+        send_notifications.assert_called_once()
+        self.assertEqual(send_notifications.call_args.args[-1], "gl.inet")
 
     def test_relative_item_url_is_resolved_against_marketplace(self):
         with patch.object(scanner.Config, "vinted_url", "https://www.vinted.it"):
@@ -360,44 +372,30 @@ class ItemProcessingTests(unittest.TestCase):
         self.assertEqual(normalized["url"], self.item["url"])
 
     @patch("vinted_scanner.send_notifications", return_value=True)
-    def test_successful_notification_saves_item(self, send_notifications):
-        with tempfile.TemporaryDirectory() as directory:
-            database_path = Path(directory) / "items.txt"
-            database_path.touch()
-            analyzed_items = set()
+    def test_successful_notification_saves_item_with_alert_data(self, send_notifications):
+        seen_ids = set()
+        succeeded = scanner.process_item(self.item, seen_ids, dry_run=False, matched_query="M920q")
 
-            succeeded = scanner.process_item(
-                self.item,
-                analyzed_items,
-                dry_run=False,
-                database_path=database_path,
-            )
-
-            self.assertTrue(succeeded)
-            self.assertEqual(database_path.read_text(encoding="utf-8"), "123\n")
-            self.assertEqual(analyzed_items, {"123"})
-            send_notifications.assert_called_once()
+        self.assertTrue(succeeded)
+        self.assertEqual(seen_ids, {"123"})
+        row = self.listing(123)
+        self.assertEqual((row["status"], row["price_eur"], row["matched_query"]), ("notified", 10.0, "M920q"))
+        self.assertEqual((row["cpu"], row["ram_gb"]), ("Intel Core i5-8600T", 16))
+        self.assertIsNotNone(row["score"])
+        self.assertEqual(row["image_url"], "https://example.test/image.jpg")
+        self.assertIn("Hardware", row["sections"])
+        send_notifications.assert_called_once()
 
     @patch("vinted_scanner.print_dry_run_item")
     def test_dry_run_prints_and_saves_item(self, print_item):
-        with tempfile.TemporaryDirectory() as directory:
-            database_path = Path(directory) / "items.txt"
-            database_path.touch()
-            analyzed_items = set()
+        seen_ids = set()
+        succeeded = scanner.process_item(self.item, seen_ids, dry_run=True, matched_query="gl.inet")
 
-            succeeded = scanner.process_item(
-                self.item,
-                analyzed_items,
-                dry_run=True,
-                database_path=database_path,
-                matched_query="gl.inet",
-            )
-
-            self.assertTrue(succeeded)
-            self.assertEqual(database_path.read_text(encoding="utf-8"), "123\n")
-            self.assertEqual(analyzed_items, {"123"})
-            print_item.assert_called_once()
-            self.assertEqual(print_item.call_args.args[-1], "gl.inet")
+        self.assertTrue(succeeded)
+        self.assertEqual(self.status(123), "dry_run")
+        self.assertEqual(seen_ids, {"123"})
+        print_item.assert_called_once()
+        self.assertEqual(print_item.call_args.args[-1], "gl.inet")
 
     @patch("vinted_scanner.send_notifications")
     @patch.object(scanner.Config, "hardware_fetch_details", False)
@@ -406,17 +404,11 @@ class ItemProcessingTests(unittest.TestCase):
         item["id"] = 987
         item["title"] = "GEEKOM A6 Ryzen 7 6800H 32GB RAM 1TB SSD"
         item["description"] = item["title"]
-        with tempfile.TemporaryDirectory() as directory:
-            database_path = Path(directory) / "items.txt"
-            database_path.touch()
-            analyzed_items = set()
-            succeeded = scanner.process_item(
-                item, analyzed_items, dry_run=False, database_path=database_path
-            )
-            self.assertTrue(succeeded)
-            self.assertEqual(analyzed_items, set())
-            self.assertEqual(database_path.read_text(encoding="utf-8"), "")
-            send_notifications.assert_not_called()
+        succeeded = scanner.process_item(item, set(), dry_run=False)
+        self.assertTrue(succeeded)
+        self.assertEqual(self.status(987), "filtered")
+        self.assertIsNone(self.listing(987)["notified_at"])
+        send_notifications.assert_not_called()
 
     @patch("vinted_scanner.send_notifications", return_value=True)
     @patch.object(scanner.Config, "hardware_fetch_details", False)
@@ -426,19 +418,14 @@ class ItemProcessingTests(unittest.TestCase):
         item["title"] = "Lenovo ThinkCentre M700"
         item["description"] = "Ultra Small Form Factor (USFF), Celeron G3900T, 4 GB DDR4, HDD 500 GB"
         item["price"] = {"amount": "49", "currency_code": "EUR"}
-        with tempfile.TemporaryDirectory() as directory:
-            database_path = Path(directory) / "items.txt"
-            database_path.touch()
-            analyzed_items = set()
-            succeeded = scanner.process_item(
-                item, analyzed_items, dry_run=False, database_path=database_path
-            )
-            self.assertTrue(succeeded)
-            self.assertEqual(analyzed_items, {"988"})
-            self.assertEqual(database_path.read_text(encoding="utf-8"), "988\n")
-            send_notifications.assert_called_once()
-            extra_lines = send_notifications.call_args.kwargs["extra_lines"]
-            self.assertTrue(any("i7-6700T" in line for line in extra_lines))
+        seen_ids = set()
+        succeeded = scanner.process_item(item, seen_ids, dry_run=False)
+        self.assertTrue(succeeded)
+        self.assertEqual(seen_ids, {"988"})
+        self.assertEqual(self.status(988), "notified")
+        send_notifications.assert_called_once()
+        extra_lines = send_notifications.call_args.kwargs["extra_lines"]
+        self.assertTrue(any("i7-6700T" in line for line in extra_lines))
 
     @patch("vinted_scanner.time.sleep")
     @patch("vinted_scanner.send_notifications", return_value=True)
@@ -452,13 +439,8 @@ class ItemProcessingTests(unittest.TestCase):
             text='<meta charset="utf-8"><meta name="description" content="Seller text with i5-8600T and 16GB RAM">',
             raise_for_status=Mock(),
         )
-        with tempfile.TemporaryDirectory() as directory, patch.object(
-            scanner.Config, "hardware_detail_fetch_delay_seconds", 0.5
-        ):
-            database_path = Path(directory) / "items.txt"
-            scanner.process_item(
-                item, set(), dry_run=False, database_path=database_path, session=session
-            )
+        with patch.object(scanner.Config, "hardware_detail_fetch_delay_seconds", 0.5):
+            scanner.process_item(item, set(), dry_run=False, session=session)
         headers = session.get.call_args.kwargs["headers"]
         self.assertIn("User-Agent", headers)
         self.assertTrue(headers["Referer"].startswith("https://"))
@@ -467,31 +449,23 @@ class ItemProcessingTests(unittest.TestCase):
     @patch("vinted_scanner.fetch_item_description", return_value="")
     @patch("vinted_scanner.send_notifications")
     @patch.object(scanner.Config, "hardware_fetch_details", True)
-    def test_filtered_listing_goes_to_versioned_ledger_and_is_not_fetched(
+    def test_filtered_listing_is_versioned_and_is_not_fetched(
         self, send_notifications, fetch_description
     ):
         item = dict(self.item)
         item["id"] = 990
         item["title"] = "GEEKOM A6 Ryzen 7 6800H 32GB RAM 1TB SSD"
         item["description"] = ""
-        with tempfile.TemporaryDirectory() as directory:
-            notified_path = Path(directory) / "items.txt"
-            filtered_path = Path(directory) / "filtered.txt"
-            filtered = scanner.load_filtered_items(filtered_path)
-            for _ in range(2):
-                scanner.process_item(
-                    item, set(), dry_run=False, database_path=notified_path,
-                    filtered_items=filtered, filtered_database_path=filtered_path,
-                )
-            self.assertEqual(notified_path.read_text(encoding="utf-8") if notified_path.exists() else "", "")
-            version = scanner.hardware_enricher.FILTER_RULES_VERSION
-            self.assertEqual(filtered_path.read_text(encoding="utf-8"), f"{version}:990\n")
-            fetch_description.assert_not_called()
-            send_notifications.assert_not_called()
-
-            with patch.object(scanner.hardware_enricher, "FILTER_RULES_VERSION", version + "-next"):
-                self.assertEqual(scanner.load_filtered_items(filtered_path), set())
-            self.assertEqual(filtered_path.read_text(encoding="utf-8"), "")
+        version = scanner.hardware_enricher.FILTER_RULES_VERSION
+        seen_ids = set()
+        for _ in range(2):
+            scanner.process_item(item, seen_ids, dry_run=False)
+        self.assertEqual(self.status(990), "filtered")
+        self.assertEqual(self.listing(990)["filter_version"], version)
+        self.assertEqual(self.store.seen_ids("mini_pc", version), {"990"})
+        self.assertEqual(self.store.seen_ids("mini_pc", version + "-next"), set())
+        fetch_description.assert_not_called()
+        send_notifications.assert_not_called()
 
     @patch("vinted_scanner.fetch_item_description", return_value="Tiny chassis, i5-6500T, 8GB RAM")
     @patch("vinted_scanner.send_notifications", return_value=True)
@@ -503,11 +477,7 @@ class ItemProcessingTests(unittest.TestCase):
         item["id"] = 991
         item["title"] = "Lenovo ThinkCentre M700"
         item["description"] = ""
-        with tempfile.TemporaryDirectory() as directory:
-            scanner.process_item(
-                item, set(), dry_run=False, database_path=Path(directory) / "items.txt",
-                filtered_items=set(), filtered_database_path=Path(directory) / "f.txt",
-            )
+        scanner.process_item(item, set(), dry_run=False)
         fetch_description.assert_called_once()
         send_notifications.assert_called_once()
 
@@ -538,38 +508,42 @@ class ItemProcessingTests(unittest.TestCase):
 
 
 class MainTests(unittest.TestCase):
+    @patch("vinted_scanner.send_run_summary")
     @patch("vinted_scanner.process_queries", return_value=True)
     @patch("vinted_scanner.initialize_vinted_session")
-    @patch("vinted_scanner.load_filtered_items", return_value=set())
-    @patch("vinted_scanner.load_analyzed_items", return_value=set())
     @patch("vinted_scanner.load_configuration")
     @patch("vinted_scanner.configure_logging")
-    def test_notification_failure_produces_exit_code_one(
-        self,
-        configure_logging,
-        load_configuration,
-        load_analyzed_items,
-        load_filtered_items,
-        initialize_session,
-        process_queries,
+    def test_notification_failure_produces_exit_code_one_and_run_is_saved(
+        self, configure_logging, load_configuration, initialize_session, process_queries, summary,
     ):
         load_configuration.return_value = ("catalog-url", [{}], {})
         initialize_session.return_value.cookies.get.return_value = None
 
-        with patch.object(scanner.Config, "ram_hunt_enabled", False):
-            exit_code = scanner.main(dry_run=False)
+        with tempfile.TemporaryDirectory() as directory:
+            database_path = Path(directory) / "test.db"
+            with patch.object(scanner.Config, "ram_hunt_enabled", False), patch.object(
+                scanner, "DATABASE_PATH", database_path
+            ), patch.object(scanner, "LEGACY_LEDGER_PATHS", {}), patch.object(
+                scanner, "LEGACY_FILTERED_PATH", Path(directory) / "filtered.txt"
+            ):
+                exit_code = scanner.main(dry_run=False)
+            database = storage.Store(database_path)
+            run = database.db.execute("SELECT * FROM runs").fetchone()
+            database.close()
 
         self.assertEqual(exit_code, 1)
         configure_logging.assert_called_once()
-        load_analyzed_items.assert_called_once_with()
         process_queries.assert_called_once()
+        self.assertEqual(run["status"], "ok")
+        self.assertIn("Vinted scan finished", run["summary"])
+        self.assertIsNone(scanner.store)
 
 
 if __name__ == "__main__":
     unittest.main()
 
 
-class RamHuntTests(unittest.TestCase):
+class RamHuntTests(TempStoreMixin, unittest.TestCase):
     def test_ram_hunt_loads_default_queries_with_price_cap(self):
         with patch.object(scanner.Config, "ram_hunt_enabled", True), patch.object(
             scanner.Config, "ram_hunt_max_price_eur", 100
@@ -632,16 +606,16 @@ class RamHuntTests(unittest.TestCase):
             "url": "https://www.vinted.it/items/6",
             "price": {"amount": "75", "currency_code": "EUR"},
         }
-        with tempfile.TemporaryDirectory() as directory:
-            database_path = Path(directory) / "ram_hunt_items.txt"
-            analyzed = set()
-            result = scanner.process_ram_hunt_item(
-                item, analyzed, dry_run=False, max_price_eur=100,
-                database_path=database_path, matched_query="portatile guasto",
-            )
-            self.assertTrue(result)
-            self.assertEqual(analyzed, {"6"})
-            self.assertEqual(database_path.read_text(encoding="utf-8"), "6\n")
+        seen_ids = set()
+        result = scanner.process_ram_hunt_item(
+            item, seen_ids, dry_run=False, max_price_eur=100, matched_query="portatile guasto",
+        )
+        self.assertTrue(result)
+        self.assertEqual(seen_ids, {"6"})
+        row = self.listing(6, "ram")
+        self.assertEqual((row["status"], row["ram_gb"]), ("notified", 16))
+        self.assertTrue(row["tier"].startswith("MEDIUM"))
+        self.assertIsNone(self.listing(6, "mini_pc"))
         send_notifications.assert_called_once()
         self.assertIn("RAM HUNT", send_notifications.call_args.kwargs["headline"])
         extra_lines = send_notifications.call_args.kwargs["extra_lines"]
@@ -665,7 +639,7 @@ class RamHuntTests(unittest.TestCase):
         self.assertIn("16 GB DDR4", scanner.classify_ram_hunt_candidate(broken, 100)["tier"])
 
 
-class CpuHuntTests(unittest.TestCase):
+class CpuHuntTests(TempStoreMixin, unittest.TestCase):
     targets = {key: scanner.Decimal(str(cap)) for key, cap in scanner.CPU_HUNT_DEFAULT_TARGETS.items()}
 
     def item(self, title, price="80", description=""):
@@ -734,15 +708,12 @@ class CpuHuntTests(unittest.TestCase):
             self.item("Processore Intel i5-9500T", "60"),
             dict(self.item("Mini PC HP EliteDesk 800 G5", "200"), id=78),
         ]
-        with tempfile.TemporaryDirectory() as directory, patch.object(
-            scanner.Config, "cpu_hunt_fetch_details", False
-        ):
-            ledger = Path(directory) / "cpu.txt"
+        with patch.object(scanner.Config, "cpu_hunt_fetch_details", False):
             failed = scanner.process_cpu_hunt_queries(
-                Mock(), "url", [{"search_text": "i5-9500T"}], {}, set(), False,
-                self.targets, database_path=ledger,
+                Mock(), "url", [{"search_text": "i5-9500T"}], {}, set(), False, self.targets,
             )
-            self.assertFalse(failed)
-            self.assertEqual(ledger.read_text(encoding="utf-8").split(), ["77", "78"])
+        self.assertFalse(failed)
+        self.assertEqual((self.status(77, "cpu"), self.status(78, "cpu")), ("notified", "ignored"))
+        self.assertEqual(self.listing(77, "cpu")["cpu"], "Intel Core i5-9500T")
         send_notifications.assert_called_once()
         self.assertIn("CPU HUNT", send_notifications.call_args.kwargs["headline"])

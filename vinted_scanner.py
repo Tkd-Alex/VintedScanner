@@ -6,6 +6,7 @@ import json
 import logging
 import re
 import smtplib
+import sqlite3
 import sys
 import time
 from decimal import Decimal, InvalidOperation
@@ -17,22 +18,31 @@ from urllib.parse import urljoin, urlsplit, urlunsplit
 import requests
 
 import Config
+import alert_parser
 import hardware_enricher
 import message_format as fmt
 import run_report as report_module
+import storage
 
 
 PROJECT_DIR = Path(__file__).resolve().parent
 PENDING_ALERTS_PATH = PROJECT_DIR / "vinted_pending_alerts.json"
-MINI_PC_LABEL = "Mini PC (Proxmox)"
-RAM_HUNT_LABEL = "RAM Hunt"
-CPU_HUNT_LABEL = "CPU Hunt"
+MINI_PC_LABEL = storage.MODE_LABELS["mini_pc"]
+RAM_HUNT_LABEL = storage.MODE_LABELS["ram"]
+CPU_HUNT_LABEL = storage.MODE_LABELS["cpu"]
 # Records searches, matches and problems of the current run; reset by main().
 run_report = report_module.RunReport()
-ITEMS_DATABASE_PATH = PROJECT_DIR / "vinted_items.txt"
-RAM_HUNT_DATABASE_PATH = PROJECT_DIR / "vinted_ram_hunt_items.txt"
-FILTERED_DATABASE_PATH = PROJECT_DIR / "vinted_filtered_items.txt"
-CPU_HUNT_DATABASE_PATH = PROJECT_DIR / "vinted_cpu_hunt_items.txt"
+# SQLite store and the id of the current run; opened by main().
+store = None
+current_run_id = None
+DATABASE_PATH = PROJECT_DIR / "vinted_scanner.db"
+# Text ledgers used before the SQLite database; imported once, then left alone.
+LEGACY_LEDGER_PATHS = {
+    "mini_pc": PROJECT_DIR / "vinted_items.txt",
+    "ram": PROJECT_DIR / "vinted_ram_hunt_items.txt",
+    "cpu": PROJECT_DIR / "vinted_cpu_hunt_items.txt",
+}
+LEGACY_FILTERED_PATH = PROJECT_DIR / "vinted_filtered_items.txt"
 LOG_PATH = PROJECT_DIR / "vinted_scanner.log"
 REQUEST_TIMEOUT_SECONDS = 30
 
@@ -463,40 +473,59 @@ def validate_notification_config(dry_run=False):
         raise ValueError("configure at least one selected notification channel or use --dry-run")
 
 
-def load_analyzed_items(database_path=ITEMS_DATABASE_PATH):
-    """Load item IDs, creating the local database if it does not exist."""
-    database_path.touch(exist_ok=True)
-    with database_path.open("r", encoding="utf-8", errors="ignore") as database:
-        return {line.strip() for line in database if line.strip()}
+def open_store():
+    """Open the SQLite database, importing the old .txt ledgers on first use."""
+    database = storage.Store(DATABASE_PATH)
+    migrated = database.migrate_legacy_ledgers(LEGACY_LEDGER_PATHS, LEGACY_FILTERED_PATH)
+    if migrated:
+        logging.info("Imported %s listing IDs from the old .txt ledgers", migrated)
+    return database
 
 
-def save_analyzed_item(item_id, database_path=ITEMS_DATABASE_PATH):
-    """Append an item ID to the local database."""
-    with database_path.open("a", encoding="utf-8") as database:
-        database.write(f"{item_id}\n")
-
-
-def load_filtered_items(database_path=FILTERED_DATABASE_PATH):
-    """Load IDs filtered out under the current rule version.
-
-    Entries are stored as "<rules version>:<item id>". Entries written by an
-    older rule set are dropped so those listings get evaluated again.
-    """
-    database_path.touch(exist_ok=True)
-    prefix = f"{hardware_enricher.FILTER_RULES_VERSION}:"
-    with database_path.open("r", encoding="utf-8", errors="ignore") as database:
-        lines = [line.strip() for line in database if line.strip()]
-    current = [line for line in lines if line.startswith(prefix)]
-    if len(current) != len(lines):
-        database_path.write_text(
-            "".join(f"{line}\n" for line in current), encoding="utf-8"
+def load_seen_ids():
+    """Return {mode: IDs to skip}; mini-PC filtered IDs count only under the current rules."""
+    return {
+        mode: store.seen_ids(
+            mode, hardware_enricher.FILTER_RULES_VERSION if mode == "mini_pc" else None
         )
-    return {line[len(prefix):] for line in current}
+        for mode in storage.MODE_LABELS
+    }
 
 
-def save_filtered_item(item_id, database_path=FILTERED_DATABASE_PATH):
-    """Record an item rejected by the current target rules."""
-    save_analyzed_item(f"{hardware_enricher.FILTER_RULES_VERSION}:{item_id}", database_path)
+def item_price_eur(item):
+    """Return the numeric amount of a normalized "75.0 EUR" price, or None."""
+    match = re.match(r"\s*(\d+(?:\.\d+)?)", str(item.get("price") or ""))
+    return float(match.group(1)) if match else None
+
+
+def alert_plain_text(item, headline, extra_lines, matched_query=None):
+    """Return the plain text of the Telegram alert built for ``item``."""
+    header = telegram_header_lines(
+        item["title"], item["price"], item["url"], item["image"], matched_query, headline
+    )
+    return fmt.to_plain_text("\n".join([*header, *map(str, extra_lines)]))
+
+
+def save_listing(mode, item, status, seen_ids, matched_query=None, alert=None, filter_version=None):
+    """Store a processed listing with the structured content of its alert.
+
+    ``alert`` is the (headline, extra_lines) pair sent to Telegram, if any.
+    """
+    fields = {}
+    if alert:
+        fields = alert_parser.parse_alert(alert_plain_text(item, *alert, matched_query)) or {}
+        fields.pop("mode", None)
+    fields.update(
+        title=item["title"], url=item["url"], image_url=item["image"],
+        price_eur=item_price_eur(item), matched_query=matched_query,
+    )
+    if item["description"]:
+        fields["description"] = item["description"]
+    store.record_listing(
+        mode, item["id"], status, run_id=current_run_id, filter_version=filter_version, **fields
+    )
+    if status in storage.SEEN_STATUSES or status == "filtered":
+        seen_ids.add(item["id"])
 
 
 def send_email(item_title, item_price, item_url, item_image, matched_query=None):
@@ -779,14 +808,14 @@ def fetch_query_items(label, matched_query, session, catalog_url, params, api_he
 def run_item_safely(label, item, process):
     """Call ``process()`` for one listing; report unexpected errors instead of crashing.
 
-    Local database errors (OSError) still propagate so the run stops cleanly.
+    Local database errors (OSError, sqlite3.Error) still propagate so the run stops cleanly.
     """
     try:
         return process()
     except requests.exceptions.RequestException as error:
         description = describe_request_error(error)
         kind = request_error_kind(error)
-    except OSError:
+    except (OSError, sqlite3.Error):
         raise
     except Exception as error:  # parsing/regex bugs must not hide the rest of the run
         logging.exception("%s failed to process a listing: %r", label, item)
@@ -848,21 +877,10 @@ def print_dry_run_item(item, matched_query=None):
     print()
 
 
-def process_item(
-    item,
-    analyzed_items,
-    dry_run,
-    database_path=ITEMS_DATABASE_PATH,
-    matched_query=None,
-    session=None,
-    filtered_items=None,
-    filtered_database_path=FILTERED_DATABASE_PATH,
-):
-    """Process one item and persist it only after the requested action succeeds."""
+def process_item(item, seen_ids, dry_run, matched_query=None, session=None):
+    """Process one mini-PC listing; it counts as seen only after the action succeeds."""
     normalized_item = normalize_item(item)
-    if not normalized_item or normalized_item["id"] in analyzed_items:
-        return True
-    if filtered_items is not None and normalized_item["id"] in filtered_items:
+    if not normalized_item or normalized_item["id"] in seen_ids:
         return True
     stats = run_report.mode(MINI_PC_LABEL)
     stats.new += 1
@@ -901,16 +919,17 @@ def process_item(
                 f"Title: {normalized_item['title']}\n"
                 f"URL: {normalized_item['url']}\n"
             )
-        # Keep filtered results out of the notification ledger. They go to a
-        # separate ledger tagged with the rule version, so they are not fetched
-        # again on every run but are re-evaluated after a rule change.
-        if filtered_items is not None:
-            save_filtered_item(normalized_item["id"], filtered_database_path)
-            filtered_items.add(normalized_item["id"])
+        # Filtered listings are tagged with the rule version, so they are not
+        # fetched again on every run but are re-evaluated after a rule change.
+        save_listing(
+            "mini_pc", normalized_item, "filtered", seen_ids, matched_query,
+            filter_version=hardware_enricher.FILTER_RULES_VERSION,
+        )
         return True
 
     stats.matches += 1
     extra_lines = hardware_enricher.build_telegram_lines(normalized_item, matched_query)
+    headline = hardware_enricher.build_telegram_headline(normalized_item)
 
     if dry_run:
         print_dry_run_item(normalized_item, matched_query)
@@ -923,13 +942,15 @@ def process_item(
             normalized_item["image"],
             matched_query,
             extra_lines=extra_lines,
-            headline=hardware_enricher.build_telegram_headline(normalized_item),
+            headline=headline,
         )
 
+    status = ("dry_run" if dry_run else "notified") if succeeded else "failed"
+    save_listing(
+        "mini_pc", normalized_item, status, seen_ids, matched_query, alert=(headline, extra_lines)
+    )
     if succeeded:
         stats.notified += 1
-        save_analyzed_item(normalized_item["id"], database_path)
-        analyzed_items.add(normalized_item["id"])
     else:
         run_report.add_issue(
             "notification",
@@ -1105,24 +1126,24 @@ def ram_hunt_telegram_lines(candidate, max_price_eur, matched_query=None):
 
 def process_hunt_item(
     raw_item,
-    analyzed_items,
+    seen_ids,
     dry_run,
     *,
     label,
     classify,
     build_lines,
     fetch_details,
-    database_path,
     matched_query=None,
     session=None,
 ):
-    """Process one listing of an independent hunt mode with its own ledger.
+    """Process one listing of an independent hunt mode with its own seen IDs.
 
     ``classify`` receives a raw catalogue item and returns a candidate or None;
     ``build_lines`` turns a candidate into Telegram HTML lines, headline first.
     """
+    mode = storage.MODE_BY_LABEL[label]
     normalized = normalize_item(raw_item)
-    if not normalized or normalized["id"] in analyzed_items:
+    if not normalized or normalized["id"] in seen_ids:
         return True
     stats = run_report.mode(label)
     stats.new += 1
@@ -1139,10 +1160,9 @@ def process_hunt_item(
         candidate = classify(item_for_classification)
 
     if candidate is None:
-        # Store irrelevant fuzzy-search results in the hunt ledger so they are
-        # not reprocessed on every cycle; this does not affect mini-PC alerts.
-        save_analyzed_item(normalized["id"], database_path)
-        analyzed_items.add(normalized["id"])
+        # Store irrelevant fuzzy-search results so they are not reprocessed on
+        # every cycle; this does not affect mini-PC alerts.
+        save_listing(mode, normalized, "ignored", seen_ids, matched_query)
         logging.info("%s ignored non-candidate listing id=%s title=%r", label, normalized["id"], normalized["title"])
         if dry_run:
             print(f"{label.upper()} SKIPPED: {normalized['title']} — outside candidate rules\n")
@@ -1166,10 +1186,10 @@ def process_hunt_item(
             headline=headline,
         )
 
+    status = ("dry_run" if dry_run else "notified") if succeeded else "failed"
+    save_listing(mode, normalized, status, seen_ids, matched_query, alert=(headline, extra_lines))
     if succeeded:
         stats.notified += 1
-        save_analyzed_item(normalized["id"], database_path)
-        analyzed_items.add(normalized["id"])
     else:
         run_report.add_issue(
             "notification", f"{label}: “{normalized['title']}” (will retry next run)"
@@ -1178,31 +1198,24 @@ def process_hunt_item(
 
 
 def process_ram_hunt_item(
-    raw_item,
-    analyzed_items,
-    dry_run,
-    max_price_eur,
-    database_path=RAM_HUNT_DATABASE_PATH,
-    matched_query=None,
-    session=None,
+    raw_item, seen_ids, dry_run, max_price_eur, matched_query=None, session=None,
 ):
-    """Independently process a RAM Hunt listing using its own dedupe database."""
+    """Independently process a RAM Hunt listing with its own seen IDs."""
     return process_hunt_item(
-        raw_item, analyzed_items, dry_run,
+        raw_item, seen_ids, dry_run,
         label=RAM_HUNT_LABEL,
         classify=lambda item: classify_ram_hunt_candidate(item, max_price_eur),
         build_lines=lambda candidate: ram_hunt_telegram_lines(
             candidate, max_price_eur, matched_query
         ),
         fetch_details=bool(getattr(Config, "ram_hunt_fetch_details", False)),
-        database_path=database_path,
         matched_query=matched_query,
         session=session,
     )
 
 
 def process_ram_hunt_queries(
-    session, catalog_url, queries, api_headers, analyzed_items, dry_run, max_price_eur,
+    session, catalog_url, queries, api_headers, seen_ids, dry_run, max_price_eur,
 ):
     """Run RAM Hunt queries without applying the main mini-PC chassis filter."""
     processing_failed = False
@@ -1220,7 +1233,7 @@ def process_ram_hunt_queries(
             if amount is None or amount > Decimal(str(max_price_eur)):
                 continue
             if not run_item_safely(RAM_HUNT_LABEL, item, lambda item=item: process_ram_hunt_item(
-                item, analyzed_items, dry_run, max_price_eur,
+                item, seen_ids, dry_run, max_price_eur,
                 matched_query=matched_query, session=session,
             )):
                 processing_failed = True
@@ -1370,10 +1383,9 @@ def cpu_hunt_telegram_lines(candidate, matched_query=None):
 
 
 def process_cpu_hunt_queries(
-    session, catalog_url, queries, api_headers, analyzed_items, dry_run, targets,
-    database_path=CPU_HUNT_DATABASE_PATH,
+    session, catalog_url, queries, api_headers, seen_ids, dry_run, targets,
 ):
-    """Run CPU Hunt queries with their own ledger and classification."""
+    """Run CPU Hunt queries with their own seen IDs and classification."""
     processing_failed = False
     fetch_details = bool(getattr(Config, "cpu_hunt_fetch_details", False))
     for params in queries:
@@ -1386,14 +1398,13 @@ def process_cpu_hunt_queries(
             continue
         for item in items:
             if not run_item_safely(CPU_HUNT_LABEL, item, lambda item=item: process_hunt_item(
-                item, analyzed_items, dry_run,
+                item, seen_ids, dry_run,
                 label=CPU_HUNT_LABEL,
                 classify=lambda raw: classify_cpu_hunt_candidate(raw, targets),
                 build_lines=lambda candidate, query=matched_query: cpu_hunt_telegram_lines(
                     candidate, query
                 ),
                 fetch_details=fetch_details,
-                database_path=database_path,
                 matched_query=matched_query,
                 session=session,
             )):
@@ -1413,10 +1424,7 @@ def initialize_vinted_session(marketplace_url):
     return session
 
 
-def process_queries(
-    session, catalog_url, queries, api_headers, analyzed_items, dry_run,
-    filtered_items=None,
-):
+def process_queries(session, catalog_url, queries, api_headers, seen_ids, dry_run):
     """Process every configured query and report whether any query failed."""
     processing_failed = False
     for params in queries:
@@ -1430,12 +1438,7 @@ def process_queries(
 
         for item in items:
             if not run_item_safely(MINI_PC_LABEL, item, lambda item=item: process_item(
-                item,
-                analyzed_items,
-                dry_run,
-                matched_query=matched_query,
-                session=session,
-                filtered_items=filtered_items,
+                item, seen_ids, dry_run, matched_query=matched_query, session=session,
             )):
                 processing_failed = True
     return processing_failed
@@ -1526,13 +1529,19 @@ def send_run_summary(dry_run=False):
 
 def main(dry_run=False):
     """Run every search mode, then report the outcome of the run on Telegram."""
-    global run_report
+    global run_report, store, current_run_id
     configure_logging()
     run_report = report_module.RunReport()
     _detail_fetch_state["paused"] = False
     _catalog_state["paused"] = False
     try:
+        store = open_store()
+        current_run_id = store.start_run(dry_run)
         exit_code = run_scan(dry_run)
+    except (OSError, sqlite3.Error) as error:
+        logging.exception("Local database error")
+        run_report.add_issue("local_database", str(error), fatal=True)
+        exit_code = 1
     except Exception as error:  # report crashes instead of failing silently
         logging.exception("Vinted scanner crashed")
         run_report.add_issue("crash", f"{type(error).__name__}: {error}", fatal=True)
@@ -1541,7 +1550,24 @@ def main(dry_run=False):
         send_run_summary(dry_run)
     except Exception:  # the summary must never change the run's exit code
         logging.exception("Unable to send the run summary")
+    save_run_outcome(dry_run)
     return exit_code
+
+
+def save_run_outcome(dry_run=False):
+    """Store the run report in the database and close it; failures are only logged."""
+    global store, current_run_id
+    if store is None:
+        return
+    try:
+        if current_run_id is not None:
+            summary = fmt.to_plain_text(run_report.build_message(dry_run))
+            store.finish_run(current_run_id, run_report, summary)
+    except sqlite3.Error:
+        logging.exception("Unable to save the run in the database")
+    finally:
+        store.close()
+        store, current_run_id = None, None
 
 
 def run_scan(dry_run=False):
@@ -1550,15 +1576,8 @@ def run_scan(dry_run=False):
         catalog_url, queries, api_headers = load_configuration(dry_run)
         ram_hunt_queries, ram_hunt_max_price = load_ram_hunt_configuration()
         cpu_hunt_queries, cpu_hunt_targets = load_cpu_hunt_configuration()
-        analyzed_items = load_analyzed_items()
-        filtered_items = load_filtered_items()
-        ram_hunt_items = (
-            load_analyzed_items(RAM_HUNT_DATABASE_PATH) if ram_hunt_queries else set()
-        )
-        cpu_hunt_items = (
-            load_analyzed_items(CPU_HUNT_DATABASE_PATH) if cpu_hunt_queries else set()
-        )
-    except (AttributeError, OSError, ValueError, InvalidOperation) as error:
+        seen_ids = load_seen_ids()
+    except (AttributeError, OSError, ValueError, InvalidOperation, sqlite3.Error) as error:
         message = f"Configuration or local database error: {error}"
         logging.error(message)
         print(message, file=sys.stderr)
@@ -1591,22 +1610,21 @@ def run_scan(dry_run=False):
     try:
         # Keep the original mini-PC search behavior and dedupe database intact.
         query_failed = process_queries(
-            session, catalog_url, queries, api_headers, analyzed_items, dry_run,
-            filtered_items=filtered_items,
+            session, catalog_url, queries, api_headers, seen_ids["mini_pc"], dry_run,
         )
         if ram_hunt_queries:
             ram_hunt_failed = process_ram_hunt_queries(
                 session, catalog_url, ram_hunt_queries, api_headers,
-                ram_hunt_items, dry_run, ram_hunt_max_price,
+                seen_ids["ram"], dry_run, ram_hunt_max_price,
             )
             query_failed = query_failed or ram_hunt_failed
         if cpu_hunt_queries:
             cpu_hunt_failed = process_cpu_hunt_queries(
                 session, catalog_url, cpu_hunt_queries, api_headers,
-                cpu_hunt_items, dry_run, cpu_hunt_targets,
+                seen_ids["cpu"], dry_run, cpu_hunt_targets,
             )
             query_failed = query_failed or cpu_hunt_failed
-    except OSError as error:
+    except (OSError, sqlite3.Error) as error:
         logging.error("Unable to update the local database: %s", error)
         run_report.add_issue("local_database", str(error), fatal=True)
         return 1
