@@ -18,6 +18,8 @@ python3 -m unittest discover -s tests -v           # full suite (what CI runs on
 python3 -m unittest tests.test_hardware_enricher -v                 # one module
 python3 -m unittest tests.test_vinted_scanner.ConfigurationTests.test_build_catalog_url_uses_marketplace_domain  # one test
 python3 vinted_scanner.py --dry-run                # no notifications, but DOES record IDs (see below)
+python3 telegram_import.py telegram-export.json [--dry-run]   # restore history into vinted_scanner.db
+python3 dashboard.py [--port 8000] [--db vinted_scanner.db]       # http://127.0.0.1:8000
 python3 vinted_query_builder.py [--refresh-cache | categories <q> | brands <q> --category <id> | filters --category <id> --options]
 ```
 
@@ -29,15 +31,19 @@ No linter or formatter is configured. Tests use `unittest` + `unittest.mock`; co
 - **`hardware_enricher.py`** — deterministic, local (no AI/external calls) listing analysis: CPU/RAM/storage parsing, `CPU_CATALOG`, `PLATFORM_PROFILES`, chassis whitelist filter (`is_target_system`, `names_target_family`), scoring (CPU 40 / price 25 / RAM 10 / storage 10 / platform 15), upgrade estimates, listing-page detail fetch, and Telegram message body building. RAM Hunt and CPU Hunt reuse its parsers.
 - **`run_report.py`** — `RunReport` accumulates per-mode stats and categorized issues (429s, HTTP/network errors, processing errors, undelivered alerts, crashes) during a run; `main()` always sends an end-of-run Telegram summary. Undeliverable summaries are queued in `vinted_pending_alerts.json` and sent late next run.
 - **`message_format.py`** — Telegram HTML escaping/formatting helpers (`esc`, `bold`, `section`, `expandable`, `to_plain_text`). All alert text is Telegram HTML; escape user/listing text through these.
+- **`storage.py`** — SQLite schema and `Store` (dedup sets, listing upsert, runs, one-time `.txt` migration). Timestamps are UTC ISO strings.
+- **`alert_parser.py`** — parses the *plain text* of an alert/run summary back into listing columns and sections. The scanner (`save_listing` builds the plain text of the exact lines it sends) and `telegram_import.py` both use it, so a change to alert wording in `hardware_enricher.build_telegram_lines`, the hunt `*_telegram_lines` or `run_report` must keep `tests/test_alert_parser.py` passing (those tests feed it output of the real builders).
+- **`telegram_import.py`** — rebuilds listings/runs from a Telegram Desktop JSON export (current alert layout only); idempotent.
+- **`dashboard.py`** + `dashboard/` — stdlib `ThreadingHTTPServer`, read-only DB connection, JSON API (`/api/overview|facets|listings|runs`) and a vanilla HTML/CSS/JS UI styled on Vinted's tokens (no build step). Query functions are plain functions tested in `tests/test_dashboard.py`.
 - **`vinted_query_builder.py`** — standalone interactive wizard/CLI for discovering Vinted category/filter IDs; never writes `Config.py`.
 
 ### State files (all next to the script, gitignored)
 
-Each mode has its own dedupe ledger: `vinted_items.txt` (mini-PC), `vinted_ram_hunt_items.txt`, `vinted_cpu_hunt_items.txt`. Mini-PC items rejected by the chassis filter go to `vinted_filtered_items.txt` prefixed with `hardware_enricher.FILTER_RULES_VERSION` — **bump that version whenever filter rules change** so previously filtered IDs are reconsidered. Logs: `vinted_scanner.log` (rotating).
+All state lives in `vinted_scanner.db` (SQLite, `storage.Store`). `listings` has one row per (mode, item_id) with a status (`notified`, `dry_run`, `failed`, `filtered`, `ignored`, `legacy`) plus the alert parsed into columns and `sections` JSON; `runs`/`run_modes`/`run_issues` mirror `RunReport`. `Store.seen_ids()` defines dedup: `failed` is retried, `filtered` is skipped only while its `filter_version` equals `hardware_enricher.FILTER_RULES_VERSION` — **bump that version whenever filter rules change** so previously filtered IDs are reconsidered. A notified row is never downgraded. The old `.txt` ledgers are imported once (`migrate_legacy_ledgers`) and left on disk; `telegram-export.json` and the DB are gitignored and must never be committed. Logs: `vinted_scanner.log` (rotating).
 
 ### Dedup/notify semantics
 
-- An item is recorded in its ledger only after **all** selected channels succeed; failures are retried next run.
+- An item counts as notified only after **all** selected channels succeed; otherwise it is stored as `failed` and retried next run.
 - `--dry-run` means "don't send", not "don't mutate": it prints and records eligible IDs (intended for initializing a fresh install).
 - Titles that don't name a supported family are rejected without fetching the listing page. Detail-page fetches and catalogue searches back off on HTTP 429 (Retry-After, retry once, then pause for the rest of the run).
 - One listing raising an exception is reported and skipped (`run_item_safely`); it must not abort the run.

@@ -604,3 +604,13 @@ The user went three to six hours without any Telegram message and could not tell
 
 Verification: 110 unit tests passed.
 
+## 15. Phase 9 — SQLite history, Telegram import and dashboard (7 November 2026)
+
+The user wanted a global view of the second-hand market for the second Proxmox node: every run, every alert split by Mini PC / RAM / CPU, in a shop-like page styled after Vinted, with the alerts stored as structured data instead of only as Telegram messages.
+
+- `storage.py` replaces the four `.txt` ledgers with `vinted_scanner.db`. Every listing the scanner processes is stored with its outcome (`notified`, `dry_run`, `failed`, `filtered`, `ignored`) and, for alerts, the parsed content of the message. Runs are stored with their per-mode counters and issues. Dedup semantics are unchanged; the old ledgers are imported once and left on disk.
+- `alert_parser.py` turns alert and run-summary text back into data; it is shared by the scanner and the importer so live and restored rows have the same shape.
+- `telegram_import.py` restores history from a Telegram Desktop JSON export. Only the alert layout introduced on 3 November (score headline) is parsed, as the user asked; the real export of 7 November gave 47 mini-PC, 6 RAM Hunt and 7 CPU Hunt alerts and 88 runs, with 10 older-format messages skipped.
+- `dashboard.py` (standard-library HTTP server, read-only) and `dashboard/` (plain HTML/CSS/JS, Vinted design tokens) show the market overview, catalogues per mode, run history and a per-listing detail panel.
+
+Verification: unit tests pass (storage, parser fed by the real message builders, importer, dashboard queries and HTTP); the real export was imported twice into a scratch database (idempotent); an offline end-to-end `main(dry_run=True)` with stubbed Vinted responses wrote listings and a run; the dashboard was checked in headless Chromium at desktop and phone width, light and dark. Not verified: a live run against Vinted with the new storage.
