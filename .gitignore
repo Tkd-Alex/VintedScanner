@@ -126,3 +126,8 @@ vinted_pending_alerts.json
 
 # Local patch archives
 /*.zip
+
+# SQLite state and private Telegram chat export
+vinted_scanner.db
+vinted_scanner.db-*
+telegram-export.json
