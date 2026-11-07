@@ -387,6 +387,41 @@ extra dependencies). It has five sections:
 It listens on `127.0.0.1` only. Use `--host 0.0.0.0` to open it to your local
 network, for example on the machine where the cron job runs; there is no login.
 
+#### Running the dashboard as a service
+
+`deploy/vinted-dashboard.service` runs the dashboard with systemd next to the
+hourly cron job, for example in a Proxmox LXC. It assumes the project is in
+`/root/VintedScanner` with a virtualenv in `venv/` and that cron runs the
+scanner as root:
+
+```bash
+0 * * * * /root/VintedScanner/venv/bin/python3 /root/VintedScanner/vinted_scanner.py >> /root/VintedScanner/logfile.log 2>&1
+```
+
+Edit the paths and `User=` in the unit if your install differs. The dashboard
+must run as the same user as the cron job, because both use the SQLite files
+`vinted_scanner.db`, `-wal` and `-shm`. Keep the project on a local disk, not
+on an NFS/SMB share.
+
+```bash
+cd /root/VintedScanner
+git pull                                    # get the version with the dashboard
+cp deploy/vinted-dashboard.service /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now vinted-dashboard
+systemctl status vinted-dashboard           # check it is running
+journalctl -u vinted-dashboard -f           # follow its log
+```
+
+The unit binds `0.0.0.0:8000`, so the dashboard is at
+`http://<container-ip>:8000` from your LAN. There is no login: do not forward
+the port to the internet. To fill in the past alerts once, copy the Telegram
+export into the container and run
+`venv/bin/python3 telegram_import.py result.json`. Until the scanner or the
+import has created the database, the dashboard shows a message asking for it.
+After updating the code, restart it with `systemctl restart vinted-dashboard`;
+the cron job picks up new code on its next run.
+
 ### Tests
 
 Run the automated tests with:

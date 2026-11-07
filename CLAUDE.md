@@ -20,6 +20,7 @@ python3 -m unittest tests.test_vinted_scanner.ConfigurationTests.test_build_cata
 python3 vinted_scanner.py --dry-run                # no notifications, but DOES record IDs (see below)
 python3 telegram_import.py telegram-export.json [--dry-run]   # restore history into vinted_scanner.db
 python3 dashboard.py [--port 8000] [--db vinted_scanner.db]       # http://127.0.0.1:8000
+# Deployment: scanner via host crontab (Proxmox LXC, /root/VintedScanner, venv); dashboard via deploy/vinted-dashboard.service on 0.0.0.0:8000
 python3 vinted_query_builder.py [--refresh-cache | categories <q> | brands <q> --category <id> | filters --category <id> --options]
 ```
 
