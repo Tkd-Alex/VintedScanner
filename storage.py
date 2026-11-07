@@ -40,8 +40,7 @@ CREATE TABLE IF NOT EXISTS runs (
     dry_run INTEGER NOT NULL DEFAULT 0,
     status TEXT NOT NULL DEFAULT 'running',
     source TEXT NOT NULL DEFAULT 'scanner',
-    summary TEXT,
-    UNIQUE (source, started_at)
+    summary TEXT
 );
 CREATE TABLE IF NOT EXISTS run_modes (
     run_id INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
@@ -75,7 +74,7 @@ CREATE TABLE IF NOT EXISTS listings (
 );
 CREATE INDEX IF NOT EXISTS listings_status ON listings (mode, status);
 CREATE INDEX IF NOT EXISTS listings_notified ON listings (notified_at);
-CREATE INDEX IF NOT EXISTS runs_started ON runs (started_at);
+CREATE INDEX IF NOT EXISTS runs_started ON runs (source, started_at);
 """
 SCHEMA_VERSION = 1
 
