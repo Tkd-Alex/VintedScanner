@@ -328,3 +328,38 @@ class HardwareAnalysisTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CpuCatalogBenchmarkTests(unittest.TestCase):
+    def test_every_catalog_cpu_has_benchmark_and_architecture(self):
+        for key, cpu in enricher.CPU_CATALOG.items():
+            with self.subTest(key=key):
+                self.assertGreater(cpu["bench_mt"], cpu["bench_st"] / 2)
+                self.assertIn("architecture", cpu)
+                self.assertGreaterEqual(cpu["launch_year"], 2015)
+
+    def test_benchmark_table_only_references_catalog_keys(self):
+        self.assertLessEqual(set(enricher.CPU_BENCHMARKS), set(enricher.CPU_CATALOG))
+        self.assertTrue(enricher.BENCHMARK_SOURCE)
+        self.assertTrue(enricher.BENCHMARK_VERSION)
+
+    def test_t_and_non_t_skus_keep_their_own_benchmarks(self):
+        t_part = enricher.CPU_CATALOG["i512500t"]
+        full = enricher.CPU_CATALOG["i512500"]
+        self.assertLess(t_part["bench_mt"], full["bench_mt"])
+        self.assertEqual(enricher._canonical_cpu("i5-12500T 16GB")[0], "Intel Core i5-12500T")
+        self.assertEqual(enricher._canonical_cpu("i5 12500 16GB")[0], "Intel Core i5-12500")
+
+    def test_generation_and_architecture_lookup(self):
+        self.assertEqual(enricher.CPU_CATALOG["i59500t"]["architecture"], "Coffee Lake Refresh")
+        self.assertEqual(enricher.CPU_CATALOG["i512500t"]["architecture"], "Alder Lake")
+        self.assertEqual(enricher.CPU_CATALOG["ryzen5pro4650ge"]["architecture"], "Renoir (Zen 2)")
+
+    def test_newer_t_series_parts_are_recognized(self):
+        for title, expected in (
+            ("Lenovo M70q Gen 3 i5-12400T", "Intel Core i5-12400T"),
+            ("HP EliteDesk 800 G9 Mini i5-13500T", "Intel Core i5-13500T"),
+            ("Dell OptiPlex 7090 Micro i5-11400T", "Intel Core i5-11400T"),
+        ):
+            with self.subTest(title=title):
+                self.assertEqual(enricher._canonical_cpu(title)[0], expected)

@@ -143,7 +143,94 @@ CPU_CATALOG: dict[str, dict[str, Any]] = {
     "ryzen7pro5750ge": {"name": "AMD Ryzen 7 PRO 5750GE", "cores": 8, "threads": 16, "tdp_w": 35, "gpu": "Radeon Vega 8 Graphics"},
     "ryzen56600h": {"name": "AMD Ryzen 5 6600H", "cores": 6, "threads": 12, "tdp_w": 45, "gpu": "AMD Radeon 660M"},
     "ryzen76800h": {"name": "AMD Ryzen 7 6800H", "cores": 8, "threads": 16, "tdp_w": 45, "gpu": "AMD Radeon 680M"},
+    "i511400t": {"name": "Intel Core i5-11400T", "cores": 6, "threads": 12, "tdp_w": 35, "gpu": "Intel UHD Graphics 730"},
+    "i511600t": {"name": "Intel Core i5-11600T", "cores": 6, "threads": 12, "tdp_w": 35, "gpu": "Intel UHD Graphics 750"},
+    "i312100t": {"name": "Intel Core i3-12100T", "cores": 4, "threads": 8, "tdp_w": 35, "gpu": "Intel UHD Graphics 730"},
+    "i512400t": {"name": "Intel Core i5-12400T", "cores": 6, "threads": 12, "tdp_w": 35, "gpu": "Intel UHD Graphics 730"},
+    "i512600t": {"name": "Intel Core i5-12600T", "cores": 6, "threads": 12, "tdp_w": 35, "gpu": "Intel UHD Graphics 770"},
+    "i513400t": {"name": "Intel Core i5-13400T", "cores": 10, "threads": 16, "tdp_w": 35, "gpu": "Intel UHD Graphics 730"},
+    "i513500t": {"name": "Intel Core i5-13500T", "cores": 14, "threads": 20, "tdp_w": 35, "gpu": "Intel UHD Graphics 770"},
+    "i713700t": {"name": "Intel Core i7-13700T", "cores": 16, "threads": 24, "tdp_w": 35, "gpu": "Intel UHD Graphics 770"},
+    "i514500t": {"name": "Intel Core i5-14500T", "cores": 14, "threads": 20, "tdp_w": 35, "gpu": "Intel UHD Graphics 770"},
+    "i310300t": {"name": "Intel Core i3-10300T", "cores": 4, "threads": 8, "tdp_w": 35, "gpu": "Intel UHD Graphics 630"},
+    "i310105t": {"name": "Intel Core i3-10105T", "cores": 4, "threads": 8, "tdp_w": 35, "gpu": "Intel UHD Graphics 630"},
+    "i99900t": {"name": "Intel Core i9-9900T", "cores": 8, "threads": 16, "tdp_w": 35, "gpu": "Intel UHD Graphics 630"},
+    "i910900t": {"name": "Intel Core i9-10900T", "cores": 10, "threads": 20, "tdp_w": 35, "gpu": "Intel UHD Graphics 630"},
+    "g6400t": {"name": "Intel Pentium Gold G6400T", "cores": 2, "threads": 4, "tdp_w": 35, "gpu": "Intel UHD Graphics 610"},
 }
+
+# PassMark CPU Mark ratings as (single thread, multithread), copied once from
+# cpubenchmark.net's CPU lists and per-CPU pages. They are averages of user
+# submissions, not a test of the listed machine. Refresh by hand (never during a
+# scan); a CPU without an entry falls back to CPU_PERFORMANCE_POINTS.
+BENCHMARK_SOURCE = "PassMark CPU Mark"
+BENCHMARK_VERSION = "cpubenchmark.net, retrieved 2026-11-09"
+CPU_BENCHMARKS: dict[str, tuple[int, int]] = {
+    "g3900t": (1529, 1948), "g3930t": (1655, 2023), "g4400t": (1743, 2318), "g4500t": (1856, 2411),
+    "g4560t": (1726, 2976), "g4600t": (1775, 3062), "g4900t": (1733, 2236), "g4930t": (1773, 2287),
+    "g5400t": (1793, 3161), "g5420t": (1899, 3330), "g5500t": (1890, 3293), "g5600t": (2000, 3496),
+    "i56400t": (1606, 4258), "i56500t": (1773, 4763), "i56600t": (2055, 5588), "i57500": (2244, 6045),
+    "i57500t": (1918, 5241), "i58400t": (1899, 7394), "i58500": (2428, 9501), "i58500t": (1996, 7724),
+    "i58600t": (2261, 9149), "i76700t": (2007, 6975), "i78700": (2624, 12731), "i77700t": (2131, 7547),
+    "i78700t": (2299, 10212), "i59500": (2564, 9841), "i59500t": (2105, 8008), "i79700": (2742, 13167),
+    "i79700t": (2418, 10581), "i510400": (2555, 11956), "i510500": (2777, 12872), "i510500t": (2283, 10238),
+    "i710700": (2879, 15963), "i710700t": (2568, 12801), "i511500": (3131, 17055), "i511500t": (2536, 12782),
+    "i711700": (3253, 20564), "i711700t": (2850, 15199), "i512500": (3645, 19680), "i512500t": (3440, 16310),
+    "i712700": (3839, 29737), "i712700t": (3558, 21129), "i36100t": (1854, 3635), "i37100t": (1911, 3728),
+    "i38100t": (1855, 5249), "i39100t": (2116, 5637), "i310100t": (2255, 7347), "i56500": (2087, 5597),
+    "i57400t": (1733, 4673), "i57600": (2449, 6583), "i57600t": (2138, 5844), "i58400": (2364, 9236),
+    "i58600": (2554, 9990), "i59400": (2412, 9347), "i59400t": (2058, 8092), "i59600t": (2416, 9568),
+    "i510400t": (2124, 9769), "i510600t": (2460, 11482), "i76700": (2274, 8032), "i77700": (2441, 8638),
+    "ryzen3pro3200g": (2112, 6563), "ryzen5pro3400g": (2281, 9004), "ryzen3pro2200g": (2035, 6607), "ryzen5pro2400g": (2138, 8546),
+    "ryzen3pro3200ge": (2117, 6732), "ryzen5pro3400ge": (2085, 7770), "a10pro9700e": (1454, 3059), "a12pro9800e": (1469, 3049),
+    "n100": (1879, 5304), "ryzen3pro2200ge": (1991, 6099), "ryzen5pro2400ge": (2121, 7801), "ryzen5pro4650ge": (2609, 15301),
+    "ryzen7pro4750ge": (2677, 18436), "ryzen5pro5650ge": (3187, 17964), "ryzen7pro5750ge": (3252, 20998), "ryzen56600h": (3133, 17959),
+    "ryzen76800h": (3177, 22651), "i511400t": (2475, 13104), "i312100t": (3221, 12392), "i512400t": (3331, 15575),
+    "i512600t": (3549, 17444), "i513500t": (3578, 22411), "i513400t": (3474, 20095), "i713700t": (3801, 27130),
+    "i514500t": (3735, 22840), "i310300t": (2291, 7876), "i511600t": (2762, 14649), "i310105t": (2355, 7803),
+    "g6400t": (2102, 3565), "i99900t": (2456, 13029), "i910900t": (2519, 14714),
+}
+
+# Microarchitecture and launch year. Intel Core parts follow their generation;
+# the rest are listed explicitly. Approximate launch years, for context only.
+CORE_GENERATION_ARCHITECTURES: dict[int, tuple[str, int]] = {
+    6: ("Skylake", 2015), 7: ("Kaby Lake", 2017), 8: ("Coffee Lake", 2018),
+    9: ("Coffee Lake Refresh", 2019), 10: ("Comet Lake", 2020), 11: ("Rocket Lake", 2021),
+    12: ("Alder Lake", 2022), 13: ("Raptor Lake", 2023), 14: ("Raptor Lake Refresh", 2024),
+}
+CPU_ARCHITECTURES: dict[str, tuple[str, int]] = {
+    "g3900t": ("Skylake", 2015), "g4400t": ("Skylake", 2015), "g4500t": ("Skylake", 2015),
+    "g3930t": ("Kaby Lake", 2017), "g4560t": ("Kaby Lake", 2017), "g4600t": ("Kaby Lake", 2017),
+    "g4900t": ("Coffee Lake", 2018), "g5400t": ("Coffee Lake", 2018), "g5500t": ("Coffee Lake", 2018),
+    "g5600t": ("Coffee Lake", 2018), "g4930t": ("Coffee Lake", 2019), "g5420t": ("Coffee Lake", 2019),
+    "g6400t": ("Comet Lake", 2020),
+    # Desktop 8th-gen non-T parts launched in late 2017, the T parts in 2018.
+    "i58400": ("Coffee Lake", 2017), "i58600": ("Coffee Lake", 2017), "i78700": ("Coffee Lake", 2017),
+    "n100": ("Alder Lake-N", 2023),
+    "a10pro9700e": ("Bristol Ridge (Excavator)", 2016), "a12pro9800e": ("Bristol Ridge (Excavator)", 2016),
+    "ryzen3pro2200g": ("Raven Ridge (Zen)", 2018), "ryzen5pro2400g": ("Raven Ridge (Zen)", 2018),
+    "ryzen3pro2200ge": ("Raven Ridge (Zen)", 2018), "ryzen5pro2400ge": ("Raven Ridge (Zen)", 2018),
+    "ryzen3pro3200g": ("Picasso (Zen+)", 2019), "ryzen5pro3400g": ("Picasso (Zen+)", 2019),
+    "ryzen3pro3200ge": ("Picasso (Zen+)", 2019), "ryzen5pro3400ge": ("Picasso (Zen+)", 2019),
+    "ryzen5pro4650ge": ("Renoir (Zen 2)", 2020), "ryzen7pro4750ge": ("Renoir (Zen 2)", 2020),
+    "ryzen5pro5650ge": ("Cezanne (Zen 3)", 2021), "ryzen7pro5750ge": ("Cezanne (Zen 3)", 2021),
+    "ryzen56600h": ("Rembrandt (Zen 3+)", 2022), "ryzen76800h": ("Rembrandt (Zen 3+)", 2022),
+}
+
+
+def _merge_reference_data() -> None:
+    """Attach benchmark and architecture fields to CPU_CATALOG entries."""
+    for key, specification in CPU_CATALOG.items():
+        if key in CPU_BENCHMARKS:
+            specification["bench_st"], specification["bench_mt"] = CPU_BENCHMARKS[key]
+        match = re.fullmatch(r"i[3579](\d{4,5})[a-z]*", key)
+        generation = int(match.group(1)[:-3]) if match else None
+        architecture = CPU_ARCHITECTURES.get(key) or CORE_GENERATION_ARCHITECTURES.get(generation)
+        if architecture:
+            specification["architecture"], specification["launch_year"] = architecture
+
+
+_merge_reference_data()
 
 # Parse longer / exact models first, so e.g. i5-7500T cannot be reduced to i5-7500.
 INTEL_CPU_RE = re.compile(
@@ -209,14 +296,15 @@ VPRO_CPU_KEYS = {
     "i510500", "i510500t", "i511500", "i511500t", "i512500", "i512500t",
     "i76700", "i76700t", "i77700", "i77700t", "i78700", "i78700t",
     "i79700", "i79700t", "i710700", "i710700t", "i711700", "i711700t",
-    "i712700", "i712700t",
+    "i712700", "i712700t", "i512600t", "i513500t", "i514500t", "i713700t",
 }
 NON_VPRO_CPU_KEYS = {
     "g3900t", "g3930t", "g4400t", "g4500t", "g4560t", "g4600t", "g4900t", "g4930t",
     "g5400t", "g5420t", "g5500t", "g5600t", "n100",
     "i36100t", "i37100t", "i38100t", "i39100t", "i310100t",
     "i56400t", "i57400t", "i58400", "i58400t", "i59400", "i59400t",
-    "i510400", "i510400t",
+    "i510400", "i510400t", "i511400t", "i512400t", "i513400t",
+    "i312100t", "i310300t", "i310105t", "g6400t",
 }
 
 
