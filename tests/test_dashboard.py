@@ -81,6 +81,77 @@ class QueryTests(unittest.TestCase):
         self.assertEqual(facets["price"], {"min": 90.0, "max": 200.0})
 
 
+class BenchmarkQueryTests(unittest.TestCase):
+    """CPU benchmarks are looked up from the catalog, never stored."""
+
+    LISTINGS = [
+        # item_id, cpu, threads, ram_gb, price, total_16
+        ("a", "Intel Core i5-8500T", 6, 8, 100.0, 150.0),     # MT 7724, cheap
+        ("b", "Intel Core i5-12500T", 12, 16, 320.0, 320.0),  # MT 16310, faster but dearer
+        ("c", "Intel Core i5-7500T", 4, 16, 160.0, 160.0),    # MT 5241: dearer and slower than "a"
+        ("d", None, None, 8, 80.0, 130.0),                    # CPU unknown
+        ("e", "Intel Core i3-0000T", 4, 8, 50.0, 100.0),      # not in the catalog
+    ]
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        store = storage.Store(Path(directory.name) / "test.db")
+        for index, (item_id, cpu, threads, ram, price, total_16) in enumerate(self.LISTINGS):
+            store.record_listing(
+                "mini_pc", item_id, "notified", seen_at=f"2026-11-0{index + 1}T10:00:00Z",
+                title=f"Mini {item_id}", cpu=cpu, threads=threads, ram_gb=ram, price_eur=price,
+                total_16_eur=total_16, score=50, platform="HP EliteDesk 800 G4 Mini", generation=8,
+            )
+        store.close()
+        self.db = storage.connect(Path(directory.name) / "test.db", readonly=True)
+        self.addCleanup(self.db.close)
+
+    def ids(self, params):
+        return [i["item_id"] for i in dashboard.listings(self.db, {"mode": "mini_pc", **params})["items"]]
+
+    def test_benchmark_columns_come_from_the_catalog(self):
+        items = {i["item_id"]: i for i in dashboard.listings(self.db, {})["items"]}
+        self.assertEqual((items["a"]["bench_mt"], items["a"]["bench_st"]), (7724, 1996))
+        self.assertIsNone(items["d"]["bench_mt"])
+        self.assertIsNone(items["e"]["bench_mt"])
+
+    def test_performance_sorts_put_unknown_cpus_last(self):
+        # MT per euro of the 16 GB build: a 51.5, b 51.0, c 32.8
+        self.assertEqual(self.ids({"sort": "perf_value"})[:3], ["a", "b", "c"])
+        self.assertEqual(self.ids({"sort": "fastest"})[:3], ["b", "a", "c"])
+        self.assertEqual(set(self.ids({"sort": "fastest"})[3:]), {"d", "e"})
+
+    def test_hardware_filters(self):
+        self.assertEqual(self.ids({"min_threads": "6", "sort": "price"}), ["a", "b"])
+        self.assertEqual(self.ids({"min_ram": "16", "sort": "price"}), ["c", "b"])
+        self.assertEqual(self.ids({"min_mt": "7000", "sort": "price"}), ["a", "b"])
+        self.assertEqual(len(self.ids({"min_mt": "lots", "min_threads": "", "min_ram": "x"})), 5)
+
+    def test_value_frontier_and_market_stats(self):
+        market = dashboard.overview(self.db)["market"]
+        self.assertEqual(market["value_frontier"], ["a", "b"])
+        self.assertEqual(market["benchmarked"], 3)
+        self.assertEqual([i["item_id"] for i in market["best_perf_value"]], ["a", "b", "c"])
+        [generation] = market["by_generation"]
+        self.assertEqual(generation["median_bench_mt"], 7724)
+        # median of 19.42 (a), 19.62 (b), 30.53 (c) euros per 1,000 MT points
+        self.assertEqual(generation["eur_per_1k_mt"], round(320 / 16310 * 1000, 2))
+
+    def test_detail_includes_reference_ratios(self):
+        detail = dashboard.listing_detail(self.db, "mini_pc", "b")
+        self.assertEqual(detail["bench_mt"], 16310)
+        names = [ref["name"] for ref in detail["vs_reference"]]
+        self.assertIn("N100", names)
+        self.assertEqual(dashboard.listing_detail(self.db, "mini_pc", "d")["vs_reference"], [])
+
+    def test_references_follow_config(self):
+        import Config
+        with patch.object(Config, "hardware_reference_cpus", ["i7-8700T"], create=True):
+            self.assertEqual([r["name"] for r in dashboard.references()["items"]], ["i7-8700T"])
+        self.assertIn("PassMark", dashboard.references()["source"])
+
+
 class ServerTests(unittest.TestCase):
     def setUp(self):
         directory = tempfile.TemporaryDirectory()
@@ -113,6 +184,10 @@ class ServerTests(unittest.TestCase):
         content_type, body = self.get("/api/listings?mode=mini_pc&sort=price&limit=1")
         self.assertEqual(content_type, "application/json; charset=utf-8")
         self.assertEqual(json.loads(body)["items"][0]["item_id"], "3")
+
+    def test_references_endpoint(self):
+        _content_type, body = self.get("/api/references")
+        self.assertTrue(json.loads(body)["items"])
 
     def test_unknown_paths_are_404(self):
         for path in ("/api/nope", "/../storage.py", "/api/listings/mini_pc/404"):
