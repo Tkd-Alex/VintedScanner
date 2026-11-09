@@ -22,6 +22,9 @@
   --radius-m: 12px;
   --radius-full: 999px;
   --font: Inter, "Helvetica Neue", Helvetica, Arial, sans-serif;
+  /* Chart series, validated for colour-vision deficiency on this surface. */
+  --series-1: #00839c;
+  --series-2: #c4612a;
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
@@ -44,6 +47,8 @@
     --warn-tint: #513d16;
     --bad-tint: #3a1d22;
     --shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+    --series-1: #2fa3b8;
+    --series-2: #d06f36;
     color-scheme: dark;
   }
 }
@@ -123,6 +128,29 @@ h3 { font-size: 16px; }
 .legend-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--teal); }
 .legend-median { width: 2px; height: 14px; background: var(--ink); }
 
+/* -- value map (scatter) --------------------------------------------------- */
+.vmap { margin: 0; display: grid; grid-template-columns: 52px minmax(0, 1fr); grid-template-rows: 340px 22px auto; column-gap: 8px; border: 1px solid var(--line); border-radius: var(--radius-m); padding: 20px 24px 8px 12px; }
+.vmap__y { position: relative; color: var(--ink-muted); font-size: 12px; }
+.vmap__y span { position: absolute; right: 0; transform: translateY(50%); }
+.vmap__plot { position: relative; border-left: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.vmap__grid { position: absolute; left: 0; right: 0; border-top: 1px solid var(--line); opacity: 0.6; }
+.vmap__ref { position: absolute; left: 0; right: 0; border-top: 1.5px dashed var(--ink-muted); }
+.vmap__ref span { position: absolute; right: 4px; bottom: 2px; font-size: 12px; color: var(--ink-subtle); background: var(--page); padding: 0 4px; border-radius: 3px; }
+.vmap__stair { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
+.vmap__stair polyline { fill: none; stroke: var(--series-2); stroke-width: 2; vector-effect: non-scaling-stroke; opacity: 0.7; }
+.vmap__x { position: relative; color: var(--ink-muted); font-size: 12px; padding-top: 4px; }
+.vmap__x span { position: absolute; transform: translateX(-50%); }
+.vmap .board__legend { grid-column: 1 / -1; }
+/* 8px marks inside a 24px hit target; a surface ring separates overlapping dots. */
+.vdot { position: absolute; width: 24px; height: 24px; margin: 0 0 -12px -12px; padding: 0; border: 0; background: none; cursor: pointer; }
+.vdot::after { content: ""; position: absolute; inset: 7px; border-radius: 50%; background: var(--series-1); box-shadow: 0 0 0 2px var(--page); }
+.vdot--deal::after { inset: 5px; background: var(--series-2); }
+.vdot:hover::after, .vdot:focus-visible::after { transform: scale(1.35); }
+.vdot:hover, .vdot:focus-visible { z-index: 2; }
+.legend-vdot { width: 10px; height: 10px; border-radius: 50%; background: var(--series-1); }
+.legend-vdot--deal { width: 12px; height: 12px; background: var(--series-2); }
+.legend-ref { width: 18px; border-top: 1.5px dashed var(--ink-muted); }
+
 /* -- pills, selects, buttons ----------------------------------------------- */
 .pill, .select, .filters input { height: 36px; border: 1px solid var(--line); background: var(--raised); border-radius: var(--radius-full); padding: 0 14px; cursor: pointer; }
 .pill { white-space: nowrap; }
@@ -161,6 +189,7 @@ h3 { font-size: 16px; }
 .card__build { color: var(--ink-subtle); font-size: 13px; }
 .card__title { margin-top: 2px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .card__meta { color: var(--ink-subtle); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.card__bench { color: var(--ink-subtle); font-size: 13px; font-weight: 500; }
 
 /* -- tables ---------------------------------------------------------------- */
 .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius-m); }
@@ -237,6 +266,8 @@ td.num, th.num { text-align: right; }
   .board__axis > :first-child { display: none; }
   .board__ticks span:nth-child(even) { display: none; }
   .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px 12px; }
+  .vmap { grid-template-columns: 40px minmax(0, 1fr); grid-template-rows: 260px 22px auto; padding: 16px 16px 4px 8px; }
+  .vmap__x span:nth-child(even) { display: none; }
   .filters { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; margin: 0 -16px; padding: 0 16px; }
   .filters > * { flex: none; }
   .catalog__bar { flex-wrap: wrap; }
