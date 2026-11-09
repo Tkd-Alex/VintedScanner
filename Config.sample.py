@@ -71,6 +71,10 @@ hardware_cpu_upgrade_costs_eur = {
 # They are comparison anchors only, never a notification filter.
 hardware_reference_cpus = ["n100", "i512500t"]
 
+# Relative weights of the informational mini-PC score, rescaled to 100 points.
+# Scores never decide whether a listing is notified.
+hardware_score_weights = {"cpu": 40, "price": 25, "ram": 10, "storage": 10, "platform": 15}
+
 # Vinted search queries
 # "search_text" may be empty when searching only by filters.
 # The query builder defaults to relevance and 24 results to limit weak matches

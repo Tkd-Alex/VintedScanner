@@ -40,6 +40,10 @@ DEFAULT_REFERENCE_CPUS = ("n100", "i512500t")
 ESTIMATED_CPU_FACTOR = 0.7
 # Unknown CPU on an unknown platform: neutral, not worse than a Celeron.
 UNKNOWN_CPU_POINTS = 8
+# Default maximum points per score component; they add up to 100. Override
+# with hardware_score_weights in Config.py: values are relative weights and are
+# rescaled to a 100-point total.
+DEFAULT_SCORE_WEIGHTS: dict[str, float] = {"cpu": 40, "price": 25, "ram": 10, "storage": 10, "platform": 15}
 STRONG_CANDIDATE_SCORE = 70
 WORTH_EVALUATING_SCORE = 55
 
@@ -566,41 +570,55 @@ def _vpro_status(platform: dict[str, Any] | None, cpu_key: str | None) -> tuple[
     return "possible: vPro chipset, the CPU must be a vPro model", 4
 
 
-def _canonical_cpu(text: str) -> tuple[str | None, dict[str, Any] | None]:
+def _cpu_candidates(text: str):
+    """Yield (name, spec) for every catalog CPU mentioned, most specific patterns first."""
     n100 = N100_RE.search(text)
     if n100:
-        return "Intel Processor N100", CPU_CATALOG["n100"]
+        yield "Intel Processor N100", CPU_CATALOG["n100"]
 
     for match in INTEL_CPU_RE.finditer(text):
         key = ("i" + match.group(1) + match.group(2) + (match.group(3) or "")).lower()
         # A suffixless model is not the same SKU as its low-power T version.
         if key in CPU_CATALOG:
-            return CPU_CATALOG[key]["name"], CPU_CATALOG[key]
+            yield CPU_CATALOG[key]["name"], CPU_CATALOG[key]
 
     for match in AMD_CPU_RE.finditer(text):
         family = "ryzen" + match.group(1) + ("pro" if match.group(2) else "") + match.group(3)
         key = re.sub(r"[^a-z0-9]", "", family.lower())
         if key in CPU_CATALOG:
-            return CPU_CATALOG[key]["name"], CPU_CATALOG[key]
+            yield CPU_CATALOG[key]["name"], CPU_CATALOG[key]
 
     for match in ENTRY_LEVEL_CPU_RE.finditer(text):
         key = re.sub(r"[^a-z0-9]", "", match.group(1).lower())
         if key in CPU_CATALOG:
-            return CPU_CATALOG[key]["name"], CPU_CATALOG[key]
+            yield CPU_CATALOG[key]["name"], CPU_CATALOG[key]
 
     for match in AMD_A_SERIES_RE.finditer(text):
         key = f"a{match.group(1)}pro{match.group(2).lower()}"
         if key in CPU_CATALOG:
-            return CPU_CATALOG[key]["name"], CPU_CATALOG[key]
+            yield CPU_CATALOG[key]["name"], CPU_CATALOG[key]
 
     for match in BARE_T_CPU_RE.finditer(text):
         number = match.group(1)
         keys = [f"i{tier}{number}t" for tier in "3579" if f"i{tier}{number}t" in CPU_CATALOG]
         # Accept the bare number only when it maps to exactly one Core model.
         if len(keys) == 1:
-            return CPU_CATALOG[keys[0]]["name"], CPU_CATALOG[keys[0]]
+            yield CPU_CATALOG[keys[0]]["name"], CPU_CATALOG[keys[0]]
 
-    return None, None
+
+
+def _canonical_cpu(text: str) -> tuple[str | None, dict[str, Any] | None]:
+    """Return the first (most specific) catalog CPU mentioned in the text."""
+    return next(_cpu_candidates(text), (None, None))
+
+
+def cpu_mentions(text: str) -> list[str]:
+    """Distinct catalog CPU names mentioned, in match-priority order."""
+    names: list[str] = []
+    for name, _cpu in _cpu_candidates(text):
+        if name not in names:
+            names.append(name)
+    return names
 
 
 class _ListingHTMLParser(HTMLParser):
@@ -1109,12 +1127,15 @@ def analyze_hardware(
     cpu_upgrade_costs_eur: dict[str, Any] | None = None,
     reference_cpu_keys: Any = None,
     ram_16gb_module_eur: float = DEFAULT_RAM_16GB_MODULE_EUR,
+    score_weights: Any = None,
 ) -> dict[str, Any]:
     """Extract a small structured hardware profile and an explainable ranking."""
+    weights = normalize_score_weights(score_weights)
     title = title or ""
     description = description or ""
     text = f"{title}\n{description}"
     cpu_name, cpu = _canonical_cpu(text)
+    mentioned_cpus = cpu_mentions(text)
     ram_gb = _find_ram_gb(text)
     ram_modules = _find_ram_layout(text, ram_gb)
     storage = _find_storage(text)
@@ -1200,6 +1221,7 @@ def analyze_hardware(
         target_system=target_system,
         pricing=pricing,
         estimated_cpu_key=None if cpu_name else _estimated_cpu_key(platform, text),
+        weights=weights,
     )
     score = score_parts["total"]
 
@@ -1221,6 +1243,7 @@ def analyze_hardware(
                 platform=platform,
                 target_system=target_system,
                 pricing={"effective_price_override": upgrade_total},
+                weights=weights,
             )
             upgrade_score = upgrade_score_parts["total"]
     if non_system:
@@ -1278,6 +1301,9 @@ def analyze_hardware(
             )
     if cpu_note:
         missing.insert(0, cpu_note)
+    if len(mentioned_cpus) > 1:
+        missing.insert(0, "multiple CPUs mentioned (" + ", ".join(short_cpu_name(n) for n in mentioned_cpus)
+                       + f"); analysis uses {short_cpu_name(mentioned_cpus[0])}, verify which is installed")
 
     ai_note = _ai_note(gpu, bool(discrete_match), cpu_name)
     cpu_benchmark = benchmark_for_name(cpu_name)
@@ -1288,6 +1314,7 @@ def analyze_hardware(
         "model": model,
         "cpu": cpu_name,
         "cpu_detail": cpu_detail,
+        "cpu_candidates": mentioned_cpus if len(mentioned_cpus) > 1 else [],
         "cpu_architecture": cpu.get("architecture") if cpu else None,
         "cpu_launch_year": cpu.get("launch_year") if cpu else None,
         "cpu_benchmark": cpu_benchmark,
@@ -1322,6 +1349,23 @@ def analyze_hardware(
     }
 
 
+def normalize_score_weights(weights: Any = None) -> dict[str, float]:
+    """Return component maxima summing to 100; invalid configuration means defaults."""
+    if weights is None:
+        return dict(DEFAULT_SCORE_WEIGHTS)
+    try:
+        if not isinstance(weights, dict) or set(weights) - set(DEFAULT_SCORE_WEIGHTS):
+            raise ValueError("unknown or malformed components")
+        merged = {key: float(weights.get(key, default)) for key, default in DEFAULT_SCORE_WEIGHTS.items()}
+        if any(value < 0 for value in merged.values()) or sum(merged.values()) <= 0:
+            raise ValueError("weights must be non-negative with a positive total")
+    except (TypeError, ValueError) as error:
+        logging.warning("Invalid hardware_score_weights (%s); using defaults", error)
+        return dict(DEFAULT_SCORE_WEIGHTS)
+    total = sum(merged.values())
+    return {key: value * 100 / total for key, value in merged.items()}
+
+
 def _score(
     cpu_name: str | None,
     ram_gb: int | None,
@@ -1330,8 +1374,10 @@ def _score(
     target_system: bool,
     pricing: dict[str, Any],
     estimated_cpu_key: str | None = None,
+    weights: dict[str, float] | None = None,
 ) -> dict[str, Any]:
-    """Return 100 explainable points: CPU 40, price 25, RAM 10, storage 10, platform 15."""
+    """Return 100 explainable points, by default CPU 40, price 25, RAM 10,
+    storage 10, platform 15; ``weights`` (normalized) rescales each component."""
     cpu_key = _cpu_key_for_name(cpu_name)
     cpu_estimated = False
     fraction, cpu_source = cpu_performance(cpu_key)
@@ -1431,15 +1477,17 @@ def _score(
     low_power_points = 2 if cpu_tdp is not None and cpu_tdp <= 35 else 0
     platform_points = min(15, vpro_points + generation_points + pcie_points + low_power_points)
 
-    total = cpu_points + price_points + ram_points + storage_points + platform_points
+    maxima = weights or DEFAULT_SCORE_WEIGHTS
+    raw = {"cpu": cpu_points, "price": price_points, "ram": ram_points,
+           "storage": storage_points, "platform": platform_points}
+    # Each component is computed on its default scale, then rescaled.
+    parts = {key: round(raw[key] * maxima[key] / DEFAULT_SCORE_WEIGHTS[key]) for key in raw}
+    total = sum(parts.values())
     return {
-        "cpu": cpu_points,
+        **parts,
         "cpu_estimated": cpu_estimated,
         "cpu_source": cpu_source,
-        "price": price_points,
-        "ram": ram_points,
-        "storage": storage_points,
-        "platform": platform_points,
+        "max": {key: round(value) for key, value in maxima.items()},
         "total": max(0, min(100, total)),
         "target_system": target_system,
     }
@@ -1477,12 +1525,14 @@ def enrich_item(
         cpu_upgrade_costs_eur = getattr(Config, "hardware_cpu_upgrade_costs_eur", {})
         reference_cpu_keys = getattr(Config, "hardware_reference_cpus", DEFAULT_REFERENCE_CPUS)
         ram_16gb_module_eur = float(getattr(Config, "hardware_ram_16gb_module_eur", DEFAULT_RAM_16GB_MODULE_EUR))
+        score_weights = getattr(Config, "hardware_score_weights", None)
     except (ImportError, TypeError, ValueError):
         ram_8gb_upgrade_eur = DEFAULT_RAM_8GB_UPGRADE_EUR
         ram_32gb_kit_eur = DEFAULT_RAM_32GB_KIT_EUR
         cpu_upgrade_costs_eur = {}
         reference_cpu_keys = DEFAULT_REFERENCE_CPUS
         ram_16gb_module_eur = DEFAULT_RAM_16GB_MODULE_EUR
+        score_weights = None
     analysis = analyze_hardware(
         str(item.get("title") or ""),
         description,
@@ -1492,6 +1542,7 @@ def enrich_item(
         cpu_upgrade_costs_eur=cpu_upgrade_costs_eur,
         reference_cpu_keys=reference_cpu_keys,
         ram_16gb_module_eur=ram_16gb_module_eur,
+        score_weights=score_weights,
     )
     item["description"] = description
     item["hardware_analysis"] = analysis
@@ -1637,10 +1688,11 @@ def _upgrade_rows(analysis: dict[str, Any]) -> list[str]:
 def _score_rows(analysis: dict[str, Any]) -> list[str]:
     parts = analysis.get("score_parts", {})
     estimated = parts.get("cpu_estimated")
+    maxima = parts.get("max") or DEFAULT_SCORE_WEIGHTS
     breakdown = (
-        f"CPU {parts.get('cpu', 0)}/40{'*' if estimated else ''} · "
-        f"Price {parts.get('price', 0)}/25 · RAM {parts.get('ram', 0)}/10 · "
-        f"Disk {parts.get('storage', 0)}/10 · Platform {parts.get('platform', 0)}/15"
+        f"CPU {parts.get('cpu', 0)}/{maxima['cpu']:.0f}{'*' if estimated else ''} · "
+        f"Price {parts.get('price', 0)}/{maxima['price']:.0f} · RAM {parts.get('ram', 0)}/{maxima['ram']:.0f} · "
+        f"Disk {parts.get('storage', 0)}/{maxima['storage']:.0f} · Platform {parts.get('platform', 0)}/{maxima['platform']:.0f}"
     )
     rows = [fmt.code(breakdown)]
     if estimated:

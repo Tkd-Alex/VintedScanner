@@ -528,5 +528,60 @@ class RamLayoutTests(unittest.TestCase):
         self.assertIn("both slots used", result["ram_upgrade_note"])
 
 
+class ScoreWeightTests(unittest.TestCase):
+    TITLE = "HP EliteDesk 800 G4 Mini i5-8500T 16GB RAM 256GB NVMe"
+
+    def test_default_weights_keep_the_existing_scale(self):
+        default = enricher.analyze_hardware(self.TITLE, price="200 EUR")
+        explicit = enricher.analyze_hardware(self.TITLE, price="200 EUR",
+                                             score_weights=dict(enricher.DEFAULT_SCORE_WEIGHTS))
+        self.assertEqual(default["score_parts"], explicit["score_parts"])
+        self.assertEqual(default["score_parts"]["max"], {"cpu": 40, "price": 25, "ram": 10, "storage": 10, "platform": 15})
+
+    def test_custom_weights_change_component_maxima(self):
+        result = enricher.analyze_hardware(self.TITLE, price="200 EUR",
+                                           score_weights={"cpu": 3, "price": 1, "ram": 0, "storage": 0, "platform": 0})
+        parts = result["score_parts"]
+        self.assertEqual(parts["max"], {"cpu": 75, "price": 25, "ram": 0, "storage": 0, "platform": 0})
+        self.assertEqual((parts["ram"], parts["storage"], parts["platform"]), (0, 0, 0))
+        self.assertEqual(parts["price"], 25)
+        lines = enricher.build_telegram_lines({"title": self.TITLE, "price": "200 EUR",
+                                               "hardware_analysis": result})
+        self.assertTrue(any("CPU " in line and "/75" in line for line in lines))
+
+    def test_missing_keys_use_defaults_and_invalid_config_falls_back(self):
+        partial = enricher.normalize_score_weights({"cpu": 40})
+        self.assertAlmostEqual(sum(partial.values()), 100)
+        for invalid in ({"cpu": -1}, {"gpu": 10}, {"cpu": "a lot"}, [40, 25], {k: 0 for k in enricher.DEFAULT_SCORE_WEIGHTS}):
+            with self.subTest(invalid=invalid), self.assertLogs(level="WARNING"):
+                self.assertEqual(enricher.normalize_score_weights(invalid), enricher.DEFAULT_SCORE_WEIGHTS)
+
+    def test_weights_are_read_from_config(self):
+        import Config
+        item = {"title": self.TITLE, "description": "", "price": "200 EUR"}
+        weights = {"cpu": 50, "price": 50, "ram": 0, "storage": 0, "platform": 0}
+        with patch.object(Config, "hardware_score_weights", weights, create=True):
+            enricher.enrich_item(item, fetch_details=False)
+        self.assertEqual(item["hardware_analysis"]["score_parts"]["max"]["cpu"], 50)
+
+
+class AmbiguousCpuTests(unittest.TestCase):
+    def test_multiple_cpus_are_flagged_not_silently_chosen(self):
+        result = enricher.analyze_hardware(
+            "Lenovo ThinkCentre M920q Tiny i5-8500T 16GB", "Upgradable to i7-8700T if needed.")
+        self.assertEqual(result["cpu"], "Intel Core i5-8500T")
+        self.assertEqual(result["cpu_candidates"], ["Intel Core i5-8500T", "Intel Core i7-8700T"])
+        self.assertTrue(result["missing"][0].startswith("multiple CPUs mentioned (i5-8500T, i7-8700T)"))
+
+    def test_same_cpu_written_twice_is_not_ambiguous(self):
+        result = enricher.analyze_hardware("Lenovo M920q Tiny i5-8500T", "Intel Core i5 8500T, 8500T 35W")
+        self.assertEqual(result["cpu_candidates"], [])
+        self.assertFalse(any(entry.startswith("multiple CPUs") for entry in result["missing"]))
+
+    def test_unknown_cpu_has_no_candidates(self):
+        result = enricher.analyze_hardware("Lenovo ThinkCentre M920q Tiny 8GB")
+        self.assertEqual((result["cpu"], result["cpu_candidates"]), (None, []))
+
+
 if __name__ == "__main__":
     unittest.main()
