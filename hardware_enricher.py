@@ -164,6 +164,10 @@ CPU_CATALOG: dict[str, dict[str, Any]] = {
     "i99900t": {"name": "Intel Core i9-9900T", "cores": 8, "threads": 16, "tdp_w": 35, "gpu": "Intel UHD Graphics 630"},
     "i910900t": {"name": "Intel Core i9-10900T", "cores": 10, "threads": 20, "tdp_w": 35, "gpu": "Intel UHD Graphics 630"},
     "g6400t": {"name": "Intel Pentium Gold G6400T", "cores": 2, "threads": 4, "tdp_w": 35, "gpu": "Intel UHD Graphics 610"},
+    "g7400t": {"name": "Intel Pentium Gold G7400T", "cores": 2, "threads": 4, "tdp_w": 35, "gpu": "Intel UHD Graphics 710"},
+    "i313100t": {"name": "Intel Core i3-13100T", "cores": 4, "threads": 8, "tdp_w": 35, "gpu": "Intel UHD Graphics 730"},
+    "i513600t": {"name": "Intel Core i5-13600T", "cores": 14, "threads": 20, "tdp_w": 35, "gpu": "Intel UHD Graphics 770"},
+    "i911900t": {"name": "Intel Core i9-11900T", "cores": 8, "threads": 16, "tdp_w": 35, "gpu": "Intel UHD Graphics 750"},
 }
 
 # PassMark CPU Mark ratings as (single thread, multithread), copied once from
@@ -196,6 +200,7 @@ CPU_BENCHMARKS: dict[str, tuple[int, int]] = {
     "i512600t": (3549, 17444), "i513500t": (3578, 22411), "i513400t": (3474, 20095), "i713700t": (3801, 27130),
     "i514500t": (3735, 22840), "i310300t": (2291, 7876), "i511600t": (2762, 14649), "i310105t": (2355, 7803),
     "g6400t": (2102, 3565), "i99900t": (2456, 13029), "i910900t": (2519, 14714),
+    "g7400t": (2348, 5274), "i313100t": (3359, 12738), "i513600t": (3775, 27789), "i911900t": (3208, 18245),
 }
 
 # Microarchitecture and launch year. Intel Core parts follow their generation;
@@ -210,7 +215,7 @@ CPU_ARCHITECTURES: dict[str, tuple[str, int]] = {
     "g3930t": ("Kaby Lake", 2017), "g4560t": ("Kaby Lake", 2017), "g4600t": ("Kaby Lake", 2017),
     "g4900t": ("Coffee Lake", 2018), "g5400t": ("Coffee Lake", 2018), "g5500t": ("Coffee Lake", 2018),
     "g5600t": ("Coffee Lake", 2018), "g4930t": ("Coffee Lake", 2019), "g5420t": ("Coffee Lake", 2019),
-    "g6400t": ("Comet Lake", 2020),
+    "g6400t": ("Comet Lake", 2020), "g7400t": ("Alder Lake", 2022),
     # Desktop 8th-gen non-T parts launched in late 2017, the T parts in 2018.
     "i58400": ("Coffee Lake", 2017), "i58600": ("Coffee Lake", 2017), "i78700": ("Coffee Lake", 2017),
     "n100": ("Alder Lake-N", 2023),
@@ -304,6 +309,7 @@ VPRO_CPU_KEYS = {
     "i76700", "i76700t", "i77700", "i77700t", "i78700", "i78700t",
     "i79700", "i79700t", "i710700", "i710700t", "i711700", "i711700t",
     "i712700", "i712700t", "i512600t", "i513500t", "i514500t", "i713700t",
+    "i513600t", "i911900t",
 }
 NON_VPRO_CPU_KEYS = {
     "g3900t", "g3930t", "g4400t", "g4500t", "g4560t", "g4600t", "g4900t", "g4930t",
@@ -311,7 +317,7 @@ NON_VPRO_CPU_KEYS = {
     "i36100t", "i37100t", "i38100t", "i39100t", "i310100t",
     "i56400t", "i57400t", "i58400", "i58400t", "i59400", "i59400t",
     "i510400", "i510400t", "i511400t", "i512400t", "i513400t",
-    "i312100t", "i310300t", "i310105t", "g6400t",
+    "i312100t", "i310300t", "i310105t", "g6400t", "g7400t", "i313100t",
 }
 
 
@@ -336,7 +342,22 @@ def _platform(
 # max_ram_gb is the official maximum; max_tdp_w is the highest CPU class the
 # chassis ships with (35 = T-series only). None means "not confirmed here".
 # cpu_generations lists the Intel Core generations the model was offered with.
+_GEN = r"\s*(?:Gen\.?|G)\s*"
 PLATFORM_PROFILES: list[dict[str, Any]] = [
+    # 11th-13th gen. Lenovo values from the PSREF spec sheets of each model
+    # (psref.lenovo.com, ThinkCentre_<model>_Spec.pdf, read 2026-11-09). HP and
+    # Dell values from the HP 800 G8 Desktop Mini datasheet and the Dell OptiPlex
+    # 7090 Micro Setup and Specifications; HP QuickSpecs could not be read, so
+    # unconfirmed HP fields stay None ("to verify").
+    _platform(rf"\bM70q{_GEN}4\b", "Lenovo ThinkCentre M70q Gen 4 Tiny", 13, "yes", 64, False, 35, "i513400t"),
+    _platform(rf"\bM70q{_GEN}3\b", "Lenovo ThinkCentre M70q Gen 3 Tiny", 12, "yes", 64, False, 35, "i512400t"),
+    _platform(rf"\bM70q{_GEN}2\b", "Lenovo ThinkCentre M70q Gen 2 Tiny", 11, "verify", 64, False, 35, "i511400t", (10, 11)),
+    _platform(rf"\bM80q{_GEN}3\b", "Lenovo ThinkCentre M80q Gen 3 Tiny", 12, "yes", 64, False, 35, "i512500t"),
+    _platform(rf"\bM90q{_GEN}3\b", "Lenovo ThinkCentre M90q Gen 3 Tiny", 12, "yes", 64, True, 65, "i512500t"),
+    _platform(rf"\bM90q{_GEN}2\b", "Lenovo ThinkCentre M90q Gen 2 Tiny", 11, "yes", 64, None, 65, "i511500t", (10, 11)),
+    _platform(r"\bEliteDesk\s+800\s+G8\b", "HP EliteDesk 800 G8 Mini", 11, "yes", 64, None, None, "i511500t"),
+    _platform(r"\b(?:EliteDesk|Elite\s+Mini)\s+800\s+G9\b", "HP Elite Mini 800 G9", 12, "verify", 64, None, None, "i512500t"),
+    _platform(r"\bOptiPlex\s+7090\b", "Dell OptiPlex 7090 Micro", 11, "yes", 64, None, 65, "i511500t", (10, 11)),
     _platform(r"\bM920x\b", "Lenovo ThinkCentre M920x Tiny", 8, "yes", 32, True, 65, "i58500t", (8, 9)),
     _platform(r"\bM920q?\b", "Lenovo ThinkCentre M920q Tiny", 8, "yes", 32, True, 65, "i58500t", (8, 9)),
     _platform(r"\bM720q?\b", "Lenovo ThinkCentre M720q Tiny", 8, "no", 32, True, 65, "i58500t", (8, 9)),
@@ -389,6 +410,9 @@ TYPICAL_CPU_BY_GENERATION: dict[int, dict[str, str]] = {
     8: {"entry": "g5400t", "i3": "i38100t", "i5": "i58500t", "i7": "i78700t"},
     9: {"entry": "g5400t", "i3": "i39100t", "i5": "i59500t", "i7": "i79700t"},
     10: {"entry": "g5600t", "i3": "i310100t", "i5": "i510500t", "i7": "i710700t"},
+    11: {"entry": "g6400t", "i3": "i310105t", "i5": "i511500t", "i7": "i711700t"},
+    12: {"entry": "g7400t", "i3": "i312100t", "i5": "i512500t", "i7": "i712700t"},
+    13: {"entry": "g7400t", "i3": "i313100t", "i5": "i513500t", "i7": "i713700t"},
 }
 CPU_TIER_HINT_RE = re.compile(
     r"\b(?:core\s*)?i\s*-?\s*([3579])\b|\b(celeron|pentium)\b|\b(?:amd\s+)?pro\s+(a1[02])\b",

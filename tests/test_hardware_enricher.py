@@ -454,5 +454,41 @@ class ReferenceCpuTests(unittest.TestCase):
         self.assertEqual(names, ["i7-8700T"])
 
 
+class NewerPlatformTests(unittest.TestCase):
+    def test_generation_suffix_picks_the_newer_profile(self):
+        cases = {
+            "Lenovo ThinkCentre M70q Gen 3 Tiny i5-12400T": ("Lenovo ThinkCentre M70q Gen 3 Tiny", 12),
+            "Lenovo ThinkCentre M70q Gen2 Tiny": ("Lenovo ThinkCentre M70q Gen 2 Tiny", 11),
+            "Lenovo ThinkCentre M70q Tiny i5-10400T": ("Lenovo ThinkCentre M70q Tiny", 10),
+            "Lenovo ThinkCentre M90q Gen 3 Tiny": ("Lenovo ThinkCentre M90q Gen 3 Tiny", 12),
+            "Lenovo ThinkCentre M90q Tiny": ("Lenovo ThinkCentre M90q Tiny", 10),
+            "HP EliteDesk 800 G8 Mini i5-11500T": ("HP EliteDesk 800 G8 Mini", 11),
+            "Dell OptiPlex 7090 Micro i5-11500T": ("Dell OptiPlex 7090 Micro", 11),
+            "Dell OptiPlex 7040 Micro": ("Dell OptiPlex 7040 Micro", 6),
+        }
+        for title, (name, generation) in cases.items():
+            with self.subTest(title=title):
+                profile = enricher._find_platform_profile(title)
+                self.assertEqual((profile["name"], profile["generation"]), (name, generation))
+
+    def test_unconfirmed_platform_facts_stay_unknown(self):
+        result = enricher.analyze_hardware("HP EliteDesk 800 G8 Mini i5-11500T 16GB RAM 256GB NVMe")
+        self.assertIsNone(result["platform"]["max_tdp_w"])
+        self.assertIsNone(result["platform"]["pcie_slot"])
+        lines = enricher.build_telegram_lines({"title": "HP EliteDesk 800 G8 Mini i5-11500T 16GB RAM"})
+        self.assertTrue(any("PCIe to verify" in line and "CPU TDP to verify" in line for line in lines))
+
+    def test_unknown_cpu_on_12th_gen_platform_uses_typical_part(self):
+        result = enricher.analyze_hardware("Lenovo ThinkCentre M70q Gen 3 Tiny i3 16GB RAM")
+        self.assertTrue(result["cpu_estimated"])
+        expected = round(enricher.cpu_performance("i312100t")[0] * 50 * enricher.CPU_WEIGHT
+                         * enricher.ESTIMATED_CPU_FACTOR)
+        self.assertEqual(result["score_parts"]["cpu"], expected)
+
+    def test_12th_gen_cpu_fits_newer_platforms(self):
+        self.assertIn("Lenovo ThinkCentre M70q Gen 3 Tiny", enricher.compatible_platforms("i512500t"))
+        self.assertNotIn("Lenovo ThinkCentre M70q Gen 3 Tiny", enricher.compatible_platforms("i512500"))
+
+
 if __name__ == "__main__":
     unittest.main()
