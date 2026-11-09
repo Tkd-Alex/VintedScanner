@@ -156,6 +156,9 @@ class RunSummaryTests(unittest.TestCase):
         self.pending_path = Path(directory.name) / "pending.json"
         for name, value in {
             "PENDING_ALERTS_PATH": self.pending_path,
+            "DATABASE_PATH": Path(directory.name) / "test.db",
+            "LEGACY_LEDGER_PATHS": {},
+            "LEGACY_FILTERED_PATH": Path(directory.name) / "filtered.txt",
             "configure_logging": Mock(),
             "wait_after_telegram_message": Mock(),
         }.items():

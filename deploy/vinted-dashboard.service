@@ -1,0 +1,31 @@
+# systemd unit for the Node Market dashboard (dashboard.py).
+#
+# Paths match an install in /root/VintedScanner with a virtualenv in venv/,
+# the same place the hourly cron job runs the scanner from. It runs as the
+# same user as the cron job (root) because SQLite's WAL files next to
+# vinted_scanner.db must be readable and writable by both.
+#
+# Install:
+#   cp deploy/vinted-dashboard.service /etc/systemd/system/
+#   systemctl daemon-reload
+#   systemctl enable --now vinted-dashboard
+#   journalctl -u vinted-dashboard -f
+
+[Unit]
+Description=Vinted Scanner dashboard (Node Market)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/VintedScanner
+# --host 0.0.0.0 makes it reachable from the LAN; there is no login.
+ExecStart=/root/VintedScanner/venv/bin/python3 /root/VintedScanner/dashboard.py --host 0.0.0.0 --port 8000
+Environment=PYTHONUNBUFFERED=1
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

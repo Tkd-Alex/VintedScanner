@@ -76,7 +76,7 @@ queries = []
 
 # Independent RAM Hunt mode: looks for cheap damaged laptops or low-priced
 # laptops explicitly advertised with 32 GB DDR4, for possible SO-DIMM recovery.
-# This has its own ID database and does not use the mini-PC chassis filter.
+# It keeps its own analyzed-listing IDs and does not use the mini-PC chassis filter.
 ram_hunt_enabled = True
 ram_hunt_max_price_eur = 100
 # Optional: fetch the listing page when catalogue results lack a description.
@@ -117,7 +117,7 @@ ram_hunt_queries = [
 # cheap i3/Pentium mini PC. Keys are CPU identifiers from hardware_enricher.py;
 # values are the maximum listing price in EUR. Search terms are generated from
 # the keys (e.g. "i7-8700T") unless cpu_hunt_queries is set. Uses its own
-# ID database (vinted_cpu_hunt_items.txt).
+# list of analyzed listings in vinted_scanner.db.
 cpu_hunt_enabled = False
 cpu_hunt_targets = {
     "i78700t": 90,
