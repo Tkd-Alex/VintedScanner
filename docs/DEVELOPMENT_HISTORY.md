@@ -436,13 +436,13 @@ These are important for the next agent. Do not silently claim that they have bee
 5. **No heartbeat or external health alert.** A cron job can stop running without an independent notification.
 6. **Plain-text deduplication files, not SQLite.** There is no built-in history table with query-level state, timestamps, delivery attempts or error status.
 7. **Hardware extraction is based on listing text.** Seller descriptions may be inaccurate. A parsed CPU/RAM/storage value is not a hardware diagnostic.
-8. **CPU tier points are curated heuristics, not benchmark scores.** They should not be presented as measured Cinebench/PassMark performance.
+8. **CPU benchmarks are PassMark averages, not measurements of the listed machine.** Since phase 10 the CPU score comes from PassMark CPU Mark ratings copied on 2026-11-09; they drift as PassMark collects submissions and must be refreshed by hand. The curated tier table remains only as a fallback for a CPU without benchmark data.
 9. **Platform profiles are not universal compatibility guarantees.** Exact MTM/Product Number, BIOS, motherboard, power supply, thermals and CPU suffix must be checked before purchasing a CPU.
 10. **The model whitelist can produce false negatives.** A genuine Tiny/Mini/Micro listing may be rejected if the seller omits the model/form-factor keywords. It can also be fooled by inaccurate listing text; seller evidence/photos still matter.
 11. **RAM cost model is coarse.** The €50 8→16 GB allowance is not a reliable estimate for every 4 GB machine or unusual module layout. No inspection of slots or RAM topology is possible from text alone.
 12. **Build totals may omit real checkout costs.** Vinted buyer-protection fees and shipping are generally not included unless manually included in a cost budget.
 13. **Only one CPU cost is configured by default.** Upgrade scores for other platforms may be pending until the user enters actual observed costs.
-14. **CPU coverage is curated, not exhaustive.** Phase 6 added 6th-10th gen i3 T SKUs and other common parts; 11th-gen T parts other than i5-11500T (e.g. i5-11400T) and AMD Athlon parts are still missing.
+14. **CPU coverage is curated, not exhaustive.** Phase 10 added 11th-14th gen T parts (i5-11400T/11600T, i3-12100T/13100T, i5-12400T/12600T/13400T/13500T/13600T/14500T, i7-13700T, i9-9900T/10900T/11900T) and Pentium G6400T/G7400T; AMD Athlon parts are still missing.
 15. **Filtered listings are re-evaluated only after a rule change.** Since phase 6 they are stored in `vinted_filtered_items.txt` tagged with `FILTER_RULES_VERSION`; bump that constant whenever target or exclusion rules change, otherwise old rejections stay in force.
 16. **RAM Hunt is enabled by default in the sample.** Check the actual live setting before assuming it is wanted on every scan; seven extra Vinted queries can add request volume.
 17. **The score must never become a notification threshold.** This is an explicit product requirement. Only the separate chassis rule and normal deduplication determine eligibility.
@@ -614,3 +614,21 @@ The user wanted a global view of the second-hand market for the second Proxmox n
 - `dashboard.py` (standard-library HTTP server, read-only) and `dashboard/` (plain HTML/CSS/JS, Vinted design tokens) show the market overview, catalogues per mode, run history and a per-listing detail panel.
 
 Verification: unit tests pass (storage, parser fed by the real message builders, importer, dashboard queries and HTTP); the real export was imported twice into a scratch database (idempotent); an offline end-to-end `main(dry_run=True)` with stubbed Vinted responses wrote listings and a run; the dashboard was checked in headless Chromium at desktop and phone width, light and dark. Not verified: a live run against Vinted with the new storage.
+
+## 16. Phase 10 — Benchmark-backed CPU scoring and best-deal dashboard (9 November 2026)
+
+A friend's "CPU Intelligence & Best-Deal" proposal was reviewed against the code. About half already existed (catalog, platform profiles, T/non-T handling, total-cost estimates, separate current/upgrade scores, score never a filter). The useful remainder was implemented without restructuring the modules:
+
+- `CPU_CATALOG` gained PassMark single/multithread ratings (`CPU_BENCHMARKS`, with `BENCHMARK_SOURCE`/`BENCHMARK_VERSION`), microarchitecture and launch year, plus 18 newer CPUs. Intel values come from cpubenchmark.net's CPU lists, AMD values from each CPU's page (its "Multithread Rating", not the older V9 figure).
+- The CPU score blends 70% multithread and 30% single-thread relative to the i7-12700T; the tier table is a fallback. The upgrade check compares benchmarks too.
+- Alerts gain a `Bench:` row with ratios against `hardware_reference_cpus` (default N100 and i5-12500T), and the CPU line shows architecture and year.
+- Platform profiles for ThinkCentre M70q Gen 2/3/4, M80q Gen 3, M90q Gen 2/3 (Lenovo PSREF), HP EliteDesk 800 G8 / Elite Mini 800 G9 and Dell OptiPlex 7090 Micro. HP QuickSpecs could not be read (TLS verification failed), so the HP TDP class and PCIe fields stay unknown. ProDesk G8/G9 and OptiPlex 3000/5000/7000 Micro profiles were not added for lack of a readable reference.
+- RAM module layout (`2x8GB`, `1x16GB`, `8GB+8GB`, "single module") is shown and refines the 32 GB estimate (`hardware_ram_16gb_module_eur`); a layout that does not add up stays unknown.
+- `hardware_score_weights` rescales the five components to 100 points; invalid values fall back to the defaults.
+- A listing naming several catalog CPUs keeps the most specific match and lists all candidates under "To check".
+- The dashboard registers SQL functions that look benchmarks up by CPU name (no schema change, works for Telegram imports): value map with a cost/performance frontier, "Most CPU per euro" shelf and sort, fastest-CPU sort, threads/RAM/performance filters, benchmark columns per generation and a CPU price guide.
+- The alert layout gained rows but nothing was renamed; the parser and `telegram_import.py` handle old and new alerts (tests use a fixed pre-phase alert and a mixed export).
+
+Not changed: chassis filter (`FILTER_RULES_VERSION` stays "2"), notification eligibility, deduplication, storage schema. Note that the HP **Elite Mini 800 G9** is branded without "EliteDesk", so the chassis filter does not accept it yet; adding it is a filter change needing approval.
+
+Verification: unit tests pass; alerts were rendered offline from synthetic titles; the dashboard was checked in headless Chrome at desktop and phone width on a synthetic database built through the real enricher/parser/store path. Not verified: a live Vinted run or the user's real database.
