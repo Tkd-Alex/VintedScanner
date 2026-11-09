@@ -31,6 +31,9 @@ CPU_WEIGHT = 0.8
 # parts are capped at full points rather than extending the scale.
 BENCHMARK_CEILING_CPU = "i712700t"
 BENCHMARK_MT_SHARE = 0.7
+# Comparison anchors shown in alerts (catalog keys or CPU names): the current
+# homelab node and the CPU the next node is aimed at. Not minimum requirements.
+DEFAULT_REFERENCE_CPUS = ("n100", "i512500t")
 # Unknown CPU on a known platform: typical CPU points discounted for uncertainty.
 ESTIMATED_CPU_FACTOR = 0.7
 # Unknown CPU on an unknown platform: neutral, not worse than a Celeron.
@@ -453,6 +456,63 @@ def cpu_performance(
     if cpu_key in CPU_PERFORMANCE_POINTS:
         return CPU_PERFORMANCE_POINTS[cpu_key] / 50, "tier"
     return None, None
+
+
+def short_cpu_name(name: str) -> str:
+    """"Intel Core i5-12500T" -> "i5-12500T", "Intel Processor N100" -> "N100"."""
+    return re.sub(r"^(?:Intel\s+(?:Core\s+|Processor\s+|Pentium\s+Gold\s+|Pentium\s+|Celeron\s+)?|AMD\s+)", "", name)
+
+
+def _resolve_cpu_key(value: Any) -> str | None:
+    """Accept a catalog key ("i512500t") or a CPU name ("i5-12500T", "Intel N100")."""
+    text = str(value or "").strip()
+    if text.lower() in CPU_CATALOG:
+        return text.lower()
+    name, _cpu = _canonical_cpu(text)
+    return _cpu_key_for_name(name)
+
+
+def reference_cpus(keys: Any = None) -> list[dict[str, Any]]:
+    """Return reference CPUs with their benchmark data; unknown entries are skipped."""
+    if not isinstance(keys, (list, tuple)):
+        keys = DEFAULT_REFERENCE_CPUS
+    references = []
+    for value in keys:
+        key = _resolve_cpu_key(value)
+        if not key or any(ref["key"] == key for ref in references):
+            if not key:
+                logging.warning("Unknown reference CPU ignored: %r", value)
+            continue
+        cpu = CPU_CATALOG[key]
+        references.append({
+            "key": key, "name": short_cpu_name(cpu["name"]),
+            "st": cpu.get("bench_st"), "mt": cpu.get("bench_mt"),
+        })
+    return references
+
+
+def benchmark_for_name(cpu_name: str | None) -> dict[str, Any] | None:
+    """Return {"st", "mt", "source"} for a canonical CPU name, or None."""
+    cpu = CPU_CATALOG.get(_cpu_key_for_name(cpu_name) or "")
+    if not cpu or not (cpu.get("bench_st") or cpu.get("bench_mt")):
+        return None
+    return {"st": cpu.get("bench_st"), "mt": cpu.get("bench_mt"),
+            "source": f"{BENCHMARK_SOURCE} ({BENCHMARK_VERSION})"}
+
+
+def compare_to_references(
+    benchmark: dict[str, Any] | None, references: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Multithread/single-thread ratios against each reference; None when incomplete."""
+    rows = []
+    for ref in references:
+        def ratio(metric: str) -> float | None:
+            mine = (benchmark or {}).get(metric)
+            return round(mine / ref[metric], 2) if mine and ref.get(metric) else None
+        mt_ratio, st_ratio = ratio("mt"), ratio("st")
+        rows.append({"name": ref["name"], "mt_ratio": mt_ratio, "st_ratio": st_ratio,
+                     "complete": mt_ratio is not None and st_ratio is not None})
+    return rows
 
 
 def _find_platform_profile(text: str) -> dict[str, Any] | None:
@@ -957,6 +1017,7 @@ def analyze_hardware(
     ram_8gb_upgrade_eur: float = DEFAULT_RAM_8GB_UPGRADE_EUR,
     ram_32gb_kit_eur: float = DEFAULT_RAM_32GB_KIT_EUR,
     cpu_upgrade_costs_eur: dict[str, Any] | None = None,
+    reference_cpu_keys: Any = None,
 ) -> dict[str, Any]:
     """Extract a small structured hardware profile and an explainable ranking."""
     title = title or ""
@@ -1015,6 +1076,8 @@ def analyze_hardware(
         cpu_detail = f"{known_cores} core / {known_threads} thread"
         if cpu.get("tdp_w"):
             cpu_detail += f" · nominal TDP {cpu['tdp_w']} W"
+        if cpu.get("architecture"):
+            cpu_detail += f" · {cpu['architecture']}, {cpu['launch_year']}"
     else:
         cpu_detail = "Model not recognized with enough certainty"
 
@@ -1124,10 +1187,18 @@ def analyze_hardware(
         missing.insert(0, cpu_note)
 
     ai_note = _ai_note(gpu, bool(discrete_match), cpu_name)
+    cpu_benchmark = benchmark_for_name(cpu_name)
+    cpu_vs_reference = (
+        compare_to_references(cpu_benchmark, reference_cpus(reference_cpu_keys)) if cpu_name else []
+    )
     return {
         "model": model,
         "cpu": cpu_name,
         "cpu_detail": cpu_detail,
+        "cpu_architecture": cpu.get("architecture") if cpu else None,
+        "cpu_launch_year": cpu.get("launch_year") if cpu else None,
+        "cpu_benchmark": cpu_benchmark,
+        "cpu_vs_reference": cpu_vs_reference,
         "cores": known_cores,
         "threads": known_threads,
         "ram_gb": ram_gb,
@@ -1310,10 +1381,12 @@ def enrich_item(
         ram_8gb_upgrade_eur = float(getattr(Config, "hardware_ram_8gb_upgrade_eur", DEFAULT_RAM_8GB_UPGRADE_EUR))
         ram_32gb_kit_eur = float(getattr(Config, "hardware_ram_32gb_kit_eur", DEFAULT_RAM_32GB_KIT_EUR))
         cpu_upgrade_costs_eur = getattr(Config, "hardware_cpu_upgrade_costs_eur", {})
+        reference_cpu_keys = getattr(Config, "hardware_reference_cpus", DEFAULT_REFERENCE_CPUS)
     except (ImportError, TypeError, ValueError):
         ram_8gb_upgrade_eur = DEFAULT_RAM_8GB_UPGRADE_EUR
         ram_32gb_kit_eur = DEFAULT_RAM_32GB_KIT_EUR
         cpu_upgrade_costs_eur = {}
+        reference_cpu_keys = DEFAULT_REFERENCE_CPUS
     analysis = analyze_hardware(
         str(item.get("title") or ""),
         description,
@@ -1321,6 +1394,7 @@ def enrich_item(
         ram_8gb_upgrade_eur=ram_8gb_upgrade_eur,
         ram_32gb_kit_eur=ram_32gb_kit_eur,
         cpu_upgrade_costs_eur=cpu_upgrade_costs_eur,
+        reference_cpu_keys=reference_cpu_keys,
     )
     item["description"] = description
     item["hardware_analysis"] = analysis
@@ -1353,6 +1427,22 @@ def build_telegram_headline(item: dict[str, Any]) -> str:
     return headline
 
 
+def _benchmark_row(analysis: dict[str, Any]) -> str:
+    """"Bench: ST 2,105 · MT 8,008 · ×1.5 N100 · ×0.49 i5-12500T" or "Bench: N/A"."""
+    benchmark = analysis.get("cpu_benchmark")
+    if not benchmark:
+        return "Bench: N/A (no benchmark data for this CPU)"
+    def number(value: Any) -> str:
+        return f"{value:,}" if value else "N/A"
+    parts = [f"ST {number(benchmark.get('st'))}", f"MT <b>{number(benchmark.get('mt'))}</b>"]
+    for ref in analysis.get("cpu_vs_reference") or []:
+        if ref.get("mt_ratio") is None:
+            parts.append(f"vs {fmt.esc(ref['name'])} incomplete")
+        else:
+            parts.append(f"×{ref['mt_ratio']:.1f} {fmt.esc(ref['name'])}")
+    return "Bench: " + " · ".join(parts)
+
+
 def _hardware_rows(analysis: dict[str, Any]) -> list[str]:
     rows = []
     if analysis.get("cpu"):
@@ -1361,6 +1451,8 @@ def _hardware_rows(analysis: dict[str, Any]) -> list[str]:
         rows.append("CPU: ❓ not identified · score assumes a typical CPU for this platform")
     else:
         rows.append("CPU: ❓ not identified")
+    if analysis.get("cpu"):
+        rows.append(_benchmark_row(analysis))
     if analysis.get("cpu_note"):
         rows.append(f"   {fmt.italic(analysis['cpu_note'])}")
 

@@ -35,7 +35,7 @@ class HardwareAnalysisTests(unittest.TestCase):
         self.assertEqual(result["cpu"], "Intel Core i7-9700T")
         self.assertEqual(result["cores"], 8)
         self.assertEqual(result["threads"], 8)
-        self.assertEqual(result["cpu_detail"], "8 core / 8 thread · nominal TDP 35 W")
+        self.assertEqual(result["cpu_detail"], "8 core / 8 thread · nominal TDP 35 W · Coffee Lake Refresh, 2019")
 
     def test_amd_ryzen_7_6800h_parses_integrated_gpu(self):
         result = enricher.analyze_hardware("GEEKOM A6 Ryzen 7 6800H 32GB 1TB SSD")
@@ -142,7 +142,7 @@ class HardwareAnalysisTests(unittest.TestCase):
         result = enricher.analyze_hardware("HP EliteDesk 800 G5 Mini i5-9500 16GB RAM 512GB SSD")
         self.assertEqual(result["cpu"], "Intel Core i5-9500")
         self.assertEqual(result["cores"], 6)
-        self.assertEqual(result["cpu_detail"], "6 core / 6 thread · nominal TDP 65 W")
+        self.assertEqual(result["cpu_detail"], "6 core / 6 thread · nominal TDP 65 W · Coffee Lake Refresh, 2019")
 
     def test_lines_are_grouped_in_sections(self):
         item = {
@@ -408,6 +408,50 @@ class BenchmarkScoringTests(unittest.TestCase):
         self.assertTrue(slower["cpu_upgrade"]["needed"])
         faster = enricher.analyze_hardware("Lenovo ThinkCentre M920q Tiny i7-9700T 16GB RAM")
         self.assertFalse(faster["cpu_upgrade"]["needed"])
+
+
+class ReferenceCpuTests(unittest.TestCase):
+    def test_default_references_are_n100_and_i5_12500t(self):
+        refs = enricher.reference_cpus()
+        self.assertEqual([ref["name"] for ref in refs], ["N100", "i5-12500T"])
+        self.assertEqual(refs[0]["mt"], 5304)
+
+    def test_references_accept_names_and_skip_unknown(self):
+        refs = enricher.reference_cpus(["i7-8700T", "i78700t", "nonsense"])
+        self.assertEqual([ref["key"] for ref in refs], ["i78700t"])
+        self.assertEqual(enricher.reference_cpus("not-a-list")[0]["key"], "n100")
+
+    def test_ratios_and_incomplete_comparisons(self):
+        result = enricher.analyze_hardware("HP ProDesk 400 G5 Mini i5-9500T 16GB RAM")
+        n100, target = result["cpu_vs_reference"]
+        self.assertEqual(n100["mt_ratio"], round(8008 / 5304, 2))
+        self.assertTrue(n100["complete"])
+        self.assertLess(target["mt_ratio"], 1)
+        self.assertEqual(result["cpu_benchmark"]["mt"], 8008)
+        self.assertIn("PassMark", result["cpu_benchmark"]["source"])
+        incomplete = enricher.compare_to_references({"st": 2000, "mt": None}, enricher.reference_cpus())
+        self.assertFalse(incomplete[0]["complete"])
+        self.assertIsNone(incomplete[0]["mt_ratio"])
+
+    def test_bench_row_shows_ratios_or_na(self):
+        item = {"title": "HP ProDesk 400 G5 Mini i5-9500T 16GB RAM", "description": "", "price": "220 EUR"}
+        lines = enricher.build_telegram_lines(item)
+        self.assertIn("Bench: ST 2,105 · MT <b>8,008</b> · ×1.5 N100 · ×0.5 i5-12500T", lines)
+        fake = {"name": "Intel Core i5-0000T", "cores": 4, "threads": 4, "tdp_w": 35}
+        with patch.dict(enricher.CPU_CATALOG, {"i50000t": fake}):
+            analysis = {"cpu": fake["name"], "cpu_benchmark": None}
+            self.assertTrue(enricher._benchmark_row(analysis).startswith("Bench: N/A"))
+        unknown = enricher.build_telegram_lines({"title": "Lenovo ThinkCentre M920q Tiny 8GB", "description": ""})
+        self.assertFalse(any(line.startswith("Bench:") for line in unknown))
+
+    def test_configured_references_are_used_by_enrich_item(self):
+        item = {"title": "HP ProDesk 400 G5 Mini i5-9500T 16GB RAM", "description": "", "price": "220 EUR"}
+        with patch.object(enricher, "DEFAULT_REFERENCE_CPUS", ("n100",)):
+            import Config
+            with patch.object(Config, "hardware_reference_cpus", ["i7-8700T"], create=True):
+                enricher.enrich_item(item, fetch_details=False)
+        names = [ref["name"] for ref in item["hardware_analysis"]["cpu_vs_reference"]]
+        self.assertEqual(names, ["i7-8700T"])
 
 
 if __name__ == "__main__":

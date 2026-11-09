@@ -64,6 +64,11 @@ hardware_cpu_upgrade_costs_eur = {
     "i76700t": 68,
 }
 
+# Reference CPUs for the "Bench:" comparison line (catalog keys or names such as
+# "i5-12500T"). Defaults: N100 = current homelab node, i5-12500T = target CPU.
+# They are comparison anchors only, never a notification filter.
+hardware_reference_cpus = ["n100", "i512500t"]
+
 # Vinted search queries
 # "search_text" may be empty when searching only by filters.
 # The query builder defaults to relevance and 24 results to limit weak matches
