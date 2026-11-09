@@ -326,9 +326,6 @@ class HardwareAnalysisTests(unittest.TestCase):
         self.assertLessEqual(len(result["description"]), enricher.MAX_DESCRIPTION_CHARS)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class CpuCatalogBenchmarkTests(unittest.TestCase):
     def test_every_catalog_cpu_has_benchmark_and_architecture(self):
@@ -363,3 +360,7 @@ class CpuCatalogBenchmarkTests(unittest.TestCase):
         ):
             with self.subTest(title=title):
                 self.assertEqual(enricher._canonical_cpu(title)[0], expected)
+
+
+if __name__ == "__main__":
+    unittest.main()
