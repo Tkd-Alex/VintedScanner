@@ -24,8 +24,13 @@ DEFAULT_RAM_8GB_UPGRADE_EUR = 50
 DEFAULT_RAM_32GB_KIT_EUR = 130
 PLAUSIBLE_RAM_SIZES_GB = {2, 4, 6, 8, 12, 16, 20, 24, 32, 40, 48, 64}
 
-# Score weights: CPU_PERFORMANCE_POINTS (0-50 tiers) are scaled to 40 points.
+# Score weights: CPU performance (a 0-1 fraction) is scaled to 40 points.
 CPU_WEIGHT = 0.8
+# Benchmark-based CPU performance: PassMark multithread and single-thread ratings
+# blended 70/30, each relative to a ceiling CPU that earns full points. Faster
+# parts are capped at full points rather than extending the scale.
+BENCHMARK_CEILING_CPU = "i712700t"
+BENCHMARK_MT_SHARE = 0.7
 # Unknown CPU on a known platform: typical CPU points discounted for uncertainty.
 ESTIMATED_CPU_FACTOR = 0.7
 # Unknown CPU on an unknown platform: neutral, not worse than a Celeron.
@@ -33,9 +38,8 @@ UNKNOWN_CPU_POINTS = 8
 STRONG_CANDIDATE_SCORE = 70
 WORTH_EVALUATING_SCORE = 55
 
-# Relative CPU capability points on the 0-50 portion of the ranking. These are
-# curated tiers for this use case, not benchmark results. Update when the local
-# CPU catalog is extended or better model-specific data becomes available.
+# Fallback CPU capability tiers (0-50), used only for a CPU without benchmark
+# data in CPU_BENCHMARKS. These are curated heuristics, not benchmark results.
 CPU_PERFORMANCE_POINTS: dict[str, int] = {
     "g3900t": 2, "g3930t": 2, "g4400t": 3, "g4500t": 3,
     "g4560t": 4, "g4600t": 4, "g4900t": 3, "g4930t": 3,
@@ -430,6 +434,27 @@ def compatible_platforms(cpu_key: str) -> list[str]:
     return names
 
 
+def cpu_performance(
+    cpu_key: str | None, ceiling_key: str | None = None
+) -> tuple[float | None, str | None]:
+    """Return (0-1 performance fraction, source) for a catalog CPU.
+
+    Source is "benchmark" when PassMark data exists for the CPU and the ceiling,
+    "tier" for the curated fallback, and (None, None) for an unknown CPU.
+    """
+    cpu = CPU_CATALOG.get(cpu_key or "")
+    if not cpu:
+        return None, None
+    ceiling = CPU_CATALOG.get(ceiling_key or BENCHMARK_CEILING_CPU) or CPU_CATALOG[BENCHMARK_CEILING_CPU]
+    if cpu.get("bench_mt") and cpu.get("bench_st") and ceiling.get("bench_mt") and ceiling.get("bench_st"):
+        multi = min(cpu["bench_mt"] / ceiling["bench_mt"], 1.0)
+        single = min(cpu["bench_st"] / ceiling["bench_st"], 1.0)
+        return BENCHMARK_MT_SHARE * multi + (1 - BENCHMARK_MT_SHARE) * single, "benchmark"
+    if cpu_key in CPU_PERFORMANCE_POINTS:
+        return CPU_PERFORMANCE_POINTS[cpu_key] / 50, "tier"
+    return None, None
+
+
 def _find_platform_profile(text: str) -> dict[str, Any] | None:
     for profile in PLATFORM_PROFILES:
         if profile["pattern"].search(text):
@@ -753,8 +778,8 @@ def _cpu_upgrade_estimate(
         }
 
     current_key = _cpu_key_for_name(current_cpu_name)
-    current_points = CPU_PERFORMANCE_POINTS.get(current_key or "", 0)
-    candidate_points = CPU_PERFORMANCE_POINTS.get(profile["candidate_key"], 0)
+    current_points = cpu_performance(current_key)[0] or 0.0
+    candidate_points = cpu_performance(profile["candidate_key"])[0] or 0.0
     needed = not current_key or current_points < candidate_points
 
     costs = configured_costs if isinstance(configured_costs, dict) else {}
@@ -1144,16 +1169,21 @@ def _score(
     """Return 100 explainable points: CPU 40, price 25, RAM 10, storage 10, platform 15."""
     cpu_key = _cpu_key_for_name(cpu_name)
     cpu_estimated = False
-    if cpu_name:
-        cpu_points = round(CPU_PERFORMANCE_POINTS.get(cpu_key or "", 10) * CPU_WEIGHT)
-    elif estimated_cpu_key in CPU_PERFORMANCE_POINTS:
+    fraction, cpu_source = cpu_performance(cpu_key)
+    estimated_fraction, _source = cpu_performance(estimated_cpu_key)
+    if cpu_name and fraction is not None:
+        cpu_points = round(fraction * 50 * CPU_WEIGHT)
+    elif cpu_name:
+        cpu_points = round(10 * CPU_WEIGHT)
+        cpu_source = "tier"
+    elif estimated_fraction is not None:
         # Unknown CPU on a known platform: assume a typical part, with a discount.
-        cpu_points = round(
-            CPU_PERFORMANCE_POINTS[estimated_cpu_key] * CPU_WEIGHT * ESTIMATED_CPU_FACTOR
-        )
+        cpu_points = round(estimated_fraction * 50 * CPU_WEIGHT * ESTIMATED_CPU_FACTOR)
         cpu_estimated = True
+        cpu_source = "estimated"
     else:
         cpu_points = UNKNOWN_CPU_POINTS
+        cpu_source = "unknown"
 
     if "effective_price_override" in pricing:
         effective_price = pricing.get("effective_price_override")
@@ -1240,6 +1270,7 @@ def _score(
     return {
         "cpu": cpu_points,
         "cpu_estimated": cpu_estimated,
+        "cpu_source": cpu_source,
         "price": price_points,
         "ram": ram_points,
         "storage": storage_points,

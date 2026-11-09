@@ -62,7 +62,9 @@ class HardwareAnalysisTests(unittest.TestCase):
             "Lenovo ThinkCentre M910q Tiny i7-7700T 32GB RAM 256GB SSD", price="150 EUR"
         )
         self.assertTrue(stronger["target_system"])
-        self.assertEqual(stronger["score_parts"]["cpu"], 27)
+        # i5-8600T PassMark 9149 MT / 2261 ST against the i7-12700T ceiling.
+        self.assertEqual(stronger["score_parts"]["cpu"], 20)
+        self.assertEqual(stronger["score_parts"]["cpu_source"], "benchmark")
         self.assertGreater(stronger["score_parts"]["cpu"], older["score_parts"]["cpu"])
         self.assertGreater(stronger["score"], older["score"])
         self.assertEqual(
@@ -277,7 +279,8 @@ class HardwareAnalysisTests(unittest.TestCase):
         )
         self.assertIsNone(result["cpu"])
         self.assertTrue(result["cpu_estimated"])
-        self.assertGreater(result["score_parts"]["cpu"], 20)
+        self.assertEqual(result["score_parts"]["cpu_source"], "estimated")
+        self.assertGreater(result["score_parts"]["cpu"], enricher.UNKNOWN_CPU_POINTS)
         celeron = enricher.analyze_hardware(
             "Lenovo ThinkCentre M700 Tiny Celeron G3900T 4GB RAM", price="60 EUR"
         )
@@ -360,6 +363,51 @@ class CpuCatalogBenchmarkTests(unittest.TestCase):
         ):
             with self.subTest(title=title):
                 self.assertEqual(enricher._canonical_cpu(title)[0], expected)
+
+
+class BenchmarkScoringTests(unittest.TestCase):
+    def test_benchmark_is_used_and_tier_is_only_a_fallback(self):
+        fraction, source = enricher.cpu_performance("i59500t")
+        self.assertEqual(source, "benchmark")
+        self.assertAlmostEqual(fraction, 0.7 * 8008 / 21129 + 0.3 * 2105 / 3558, places=6)
+        fake = {"name": "Test CPU", "cores": 4, "threads": 4, "tdp_w": 35}
+        with patch.dict(enricher.CPU_CATALOG, {"testcpu": fake}), \
+                patch.dict(enricher.CPU_PERFORMANCE_POINTS, {"testcpu": 25}):
+            self.assertEqual(enricher.cpu_performance("testcpu"), (0.5, "tier"))
+        self.assertEqual(enricher.cpu_performance("not-a-cpu"), (None, None))
+
+    def test_ceiling_cpu_and_faster_parts_are_capped(self):
+        self.assertAlmostEqual(enricher.cpu_performance("i712700t")[0], 1.0)
+        self.assertAlmostEqual(enricher.cpu_performance("i713700t")[0], 1.0)
+
+    def test_i7_label_does_not_beat_a_faster_i5(self):
+        def cpu_points(cpu):
+            return enricher.analyze_hardware(f"Lenovo ThinkCentre M920q Tiny {cpu} 16GB RAM")["score_parts"]["cpu"]
+        self.assertGreater(cpu_points("i5-8500T"), cpu_points("i7-6700T"))
+        self.assertGreater(cpu_points("i5-9500T"), cpu_points("i7-7700T"))
+
+    def test_cheaper_slower_system_can_outrank_overpriced_faster_one(self):
+        cheap = enricher.analyze_hardware(
+            "HP EliteDesk 800 G4 Mini i5-8500T 16GB RAM 256GB NVMe", price="150 EUR")
+        pricey = enricher.analyze_hardware(
+            "HP EliteDesk 800 G4 Mini i5-12500T 16GB RAM 256GB NVMe", price="650 EUR")
+        self.assertGreater(pricey["score_parts"]["cpu"], cheap["score_parts"]["cpu"])
+        self.assertGreater(cheap["score"], pricey["score"])
+
+    def test_unknown_cpu_never_gets_full_cpu_points(self):
+        result = enricher.analyze_hardware("Lenovo ThinkCentre M920q Tiny 16GB RAM 256GB SSD")
+        self.assertIsNone(result["cpu"])
+        self.assertLess(result["score_parts"]["cpu"], 40)
+        unknown = enricher.analyze_hardware("Lenovo ThinkCentre Tiny 16GB RAM")
+        self.assertEqual(unknown["score_parts"]["cpu"], enricher.UNKNOWN_CPU_POINTS)
+        self.assertEqual(unknown["score_parts"]["cpu_source"], "unknown")
+
+    def test_upgrade_need_follows_benchmarks(self):
+        # i5-8600T (9149 MT) is slower than the M920q candidate i7-8700T (10212 MT).
+        slower = enricher.analyze_hardware("Lenovo ThinkCentre M920q Tiny i5-8600T 16GB RAM")
+        self.assertTrue(slower["cpu_upgrade"]["needed"])
+        faster = enricher.analyze_hardware("Lenovo ThinkCentre M920q Tiny i7-9700T 16GB RAM")
+        self.assertFalse(faster["cpu_upgrade"]["needed"])
 
 
 if __name__ == "__main__":
