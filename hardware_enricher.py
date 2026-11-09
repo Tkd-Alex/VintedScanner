@@ -22,6 +22,8 @@ MAX_DESCRIPTION_CHARS = 520
 MAX_ANALYSIS_TEXT_CHARS = 5000
 DEFAULT_RAM_8GB_UPGRADE_EUR = 50
 DEFAULT_RAM_32GB_KIT_EUR = 130
+DEFAULT_RAM_16GB_MODULE_EUR = 65
+RAM_MODULE_SIZES_GB = {2, 4, 8, 16, 32, 64}
 PLAUSIBLE_RAM_SIZES_GB = {2, 4, 6, 8, 12, 16, 20, 24, 32, 40, 48, 64}
 
 # Score weights: CPU performance (a 0-1 fraction) is scaled to 40 points.
@@ -776,6 +778,47 @@ def _find_ram_gb(text: str) -> int | None:
     return None
 
 
+RAM_LAYOUT_RE = re.compile(r"\b([1-4])\s*[x×*]\s*(\d{1,2})\s*(?:gb|go)\b", re.I)
+RAM_PAIR_RE = re.compile(r"\b(\d{1,2})\s*(?:gb|go)?\s*\+\s*(\d{1,2})\s*(?:gb|go)\b", re.I)
+SINGLE_MODULE_RE = re.compile(
+    r"\b(?:single\s+(?:module|stick|dimm|so-?dimm)|(?:un\s+)?(?:unico|singolo)\s+(?:modulo|banco)"
+    r"|(?:modulo|banco)\s+(?:unico|singolo)|une?\s+seule?\s+barrette)\b",
+    re.I,
+)
+
+
+def _find_ram_layout(text: str, ram_gb: int | None) -> list[int] | None:
+    """Return installed module sizes, e.g. [8, 8], only when the listing states them.
+
+    The layout must add up to the installed RAM; anything else stays unknown,
+    so 16 GB is never assumed to be 1×16 or 2×8.
+    """
+    candidates: list[list[int]] = []
+    for match in RAM_LAYOUT_RE.finditer(text):
+        count, size = int(match.group(1)), int(match.group(2))
+        if size in RAM_MODULE_SIZES_GB:
+            candidates.append([size] * count)
+    for match in RAM_PAIR_RE.finditer(text):
+        sizes = [int(match.group(1)), int(match.group(2))]
+        if all(size in RAM_MODULE_SIZES_GB for size in sizes):
+            candidates.append(sorted(sizes, reverse=True))
+    if ram_gb and SINGLE_MODULE_RE.search(text):
+        candidates.append([ram_gb])
+    for modules in candidates:
+        if ram_gb is None or sum(modules) == ram_gb:
+            return modules
+    return None
+
+
+def ram_layout_label(modules: list[int] | None) -> str:
+    """[8, 8] -> "2×8 GB", [16, 8] -> "16+8 GB", None -> "layout unknown"."""
+    if not modules:
+        return "layout unknown"
+    if len(set(modules)) == 1:
+        return f"{len(modules)}×{modules[0]} GB"
+    return "+".join(str(size) for size in modules) + " GB"
+
+
 def _storage_unit(unit: str) -> str:
     """Normalize GB/TB and the French Go/To spelling."""
     return {"GO": "GB", "TO": "TB"}.get(unit.upper(), unit.upper())
@@ -996,8 +1039,14 @@ def _upgrade_estimates(
     price: str | None,
     ram_8gb_upgrade_eur: float,
     ram_32gb_kit_eur: float,
+    ram_modules: list[int] | None = None,
+    ram_16gb_module_eur: float = DEFAULT_RAM_16GB_MODULE_EUR,
 ) -> dict[str, Any]:
-    """Estimate outlay for 16/32 GB without assuming unknown RAM topology."""
+    """Estimate outlay for 16/32 GB without assuming unknown RAM topology.
+
+    Supported Mini/Tiny/Micro chassis have two SO-DIMM slots. A stated layout
+    refines the estimate; an unknown layout keeps the conservative budget.
+    """
     listing_price = _parse_price_eur(price)
     upgrade_16: float | None
     upgrade_32: float | None
@@ -1010,10 +1059,17 @@ def _upgrade_estimates(
     else:
         if ram_gb >= 16:
             upgrade_16 = 0.0
+        elif ram_gb == 8 and ram_modules == [4, 4]:
+            # Both slots are used: reaching 16 GB means replacing the modules.
+            upgrade_16 = float(ram_8gb_upgrade_eur)
+            note = "16 GB estimate is a rough budget: both slots used (2×4 GB), modules must be replaced"
         elif ram_gb == 8:
             # User-supplied assumption: add one compatible 8 GB module.
             upgrade_16 = float(ram_8gb_upgrade_eur)
-            note = "16 GB estimate: assumes adding 1×8 GB compatible module"
+            if ram_modules == [8]:
+                note = "16 GB estimate: 1×8 GB installed, add one compatible 8 GB module"
+            else:
+                note = "16 GB estimate: assumes adding 1×8 GB compatible module"
         elif ram_gb < 8:
             # A 4 GB base may need a replacement module or a kit; keep the same
             # planning allowance, but mark it as a rough estimate, not a fit claim.
@@ -1022,7 +1078,17 @@ def _upgrade_estimates(
         else:
             upgrade_16 = float(ram_8gb_upgrade_eur)
             note = "16 GB estimate is a rough budget: check module layout and compatibility"
-        upgrade_32 = 0.0 if ram_gb >= 32 else float(ram_32gb_kit_eur)
+        if ram_gb >= 32:
+            upgrade_32 = 0.0
+        elif ram_modules == [16]:
+            # One 16 GB module in a two-slot chassis: add a matching 16 GB module.
+            upgrade_32 = float(ram_16gb_module_eur)
+            if ram_gb >= 16:
+                note = "32 GB estimate: 1×16 GB installed, add one compatible 16 GB module"
+        else:
+            upgrade_32 = float(ram_32gb_kit_eur)
+            if ram_gb >= 16 and ram_modules and len(ram_modules) >= 2:
+                note = f"32 GB estimate: {ram_layout_label(ram_modules)} installed, both modules replaced by a 2×16 GB kit"
 
     return {
         "listing_price_eur": listing_price,
@@ -1042,6 +1108,7 @@ def analyze_hardware(
     ram_32gb_kit_eur: float = DEFAULT_RAM_32GB_KIT_EUR,
     cpu_upgrade_costs_eur: dict[str, Any] | None = None,
     reference_cpu_keys: Any = None,
+    ram_16gb_module_eur: float = DEFAULT_RAM_16GB_MODULE_EUR,
 ) -> dict[str, Any]:
     """Extract a small structured hardware profile and an explainable ranking."""
     title = title or ""
@@ -1049,6 +1116,7 @@ def analyze_hardware(
     text = f"{title}\n{description}"
     cpu_name, cpu = _canonical_cpu(text)
     ram_gb = _find_ram_gb(text)
+    ram_modules = _find_ram_layout(text, ram_gb)
     storage = _find_storage(text)
     model = _find_model(title) or _find_model(text)
     target_system, target_family = _is_target_system(text)
@@ -1106,7 +1174,8 @@ def analyze_hardware(
         cpu_detail = "Model not recognized with enough certainty"
 
     pricing = _upgrade_estimates(
-        ram_gb, price, ram_8gb_upgrade_eur, ram_32gb_kit_eur
+        ram_gb, price, ram_8gb_upgrade_eur, ram_32gb_kit_eur,
+        ram_modules=ram_modules, ram_16gb_module_eur=ram_16gb_module_eur,
     )
     platform_upgrade = _find_platform_upgrade_profile(text) if target_system else None
     cpu_upgrade = _cpu_upgrade_estimate(platform_upgrade, cpu_name, cpu_upgrade_costs_eur)
@@ -1226,6 +1295,7 @@ def analyze_hardware(
         "cores": known_cores,
         "threads": known_threads,
         "ram_gb": ram_gb,
+        "ram_modules": ram_modules,
         "storage": storage,
         "gpu": gpu,
         "form_factor": form_factor,
@@ -1406,11 +1476,13 @@ def enrich_item(
         ram_32gb_kit_eur = float(getattr(Config, "hardware_ram_32gb_kit_eur", DEFAULT_RAM_32GB_KIT_EUR))
         cpu_upgrade_costs_eur = getattr(Config, "hardware_cpu_upgrade_costs_eur", {})
         reference_cpu_keys = getattr(Config, "hardware_reference_cpus", DEFAULT_REFERENCE_CPUS)
+        ram_16gb_module_eur = float(getattr(Config, "hardware_ram_16gb_module_eur", DEFAULT_RAM_16GB_MODULE_EUR))
     except (ImportError, TypeError, ValueError):
         ram_8gb_upgrade_eur = DEFAULT_RAM_8GB_UPGRADE_EUR
         ram_32gb_kit_eur = DEFAULT_RAM_32GB_KIT_EUR
         cpu_upgrade_costs_eur = {}
         reference_cpu_keys = DEFAULT_REFERENCE_CPUS
+        ram_16gb_module_eur = DEFAULT_RAM_16GB_MODULE_EUR
     analysis = analyze_hardware(
         str(item.get("title") or ""),
         description,
@@ -1419,6 +1491,7 @@ def enrich_item(
         ram_32gb_kit_eur=ram_32gb_kit_eur,
         cpu_upgrade_costs_eur=cpu_upgrade_costs_eur,
         reference_cpu_keys=reference_cpu_keys,
+        ram_16gb_module_eur=ram_16gb_module_eur,
     )
     item["description"] = description
     item["hardware_analysis"] = analysis
@@ -1482,7 +1555,7 @@ def _hardware_rows(analysis: dict[str, Any]) -> list[str]:
 
     platform = analysis.get("platform")
     if analysis.get("ram_gb") is not None:
-        ram = f"RAM: <b>{analysis['ram_gb']} GB</b>"
+        ram = f"RAM: <b>{analysis['ram_gb']} GB</b> ({ram_layout_label(analysis.get('ram_modules'))})"
         if platform and platform.get("max_ram_gb"):
             ram += f" · max {platform['max_ram_gb']} GB"
         rows.append(ram)

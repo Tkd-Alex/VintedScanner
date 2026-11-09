@@ -55,6 +55,8 @@ hardware_discovery_price_to = 400
 # €130: planning allowance for a 2x16 GB DDR4 kit.
 hardware_ram_8gb_upgrade_eur = 50
 hardware_ram_32gb_kit_eur = 130
+# €65: one extra 16 GB SO-DIMM, used only when a listing states 1×16 GB installed.
+hardware_ram_16gb_module_eur = 65
 
 # Optional CPU price map. Keys are normalized CPU model identifiers.
 # €68 for i7-6700T is based on the Vinted listing observed in Nov 2026

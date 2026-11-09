@@ -490,5 +490,43 @@ class NewerPlatformTests(unittest.TestCase):
         self.assertNotIn("Lenovo ThinkCentre M70q Gen 3 Tiny", enricher.compatible_platforms("i512500"))
 
 
+class RamLayoutTests(unittest.TestCase):
+    def test_layouts_are_read_only_when_stated_and_consistent(self):
+        cases = {
+            "16GB RAM (2x8GB) 256GB NVMe": [8, 8],
+            "16GB RAM 1x16GB": [16],
+            "16 GB RAM single module": [16],
+            "8GB RAM 2 x 4 GB": [4, 4],
+            "16GB RAM": None,
+            "16GB RAM 2x 256GB SSD": None,
+            "16GB RAM 2x4GB": None,  # does not add up: stay unknown
+        }
+        for text, expected in cases.items():
+            with self.subTest(text=text):
+                self.assertEqual(enricher._find_ram_layout(text, enricher._find_ram_gb(text)), expected)
+
+    def test_32gb_cost_depends_on_module_layout(self):
+        def analysis(layout):
+            return enricher.analyze_hardware(
+                f"Lenovo ThinkCentre M920q Tiny i5-8500T 16GB RAM {layout}", price="150 EUR",
+                ram_32gb_kit_eur=130, ram_16gb_module_eur=65)
+        single, pair, unknown = analysis("1x16GB"), analysis("2x8GB"), analysis("")
+        self.assertEqual(single["total_to_32_eur"], 215)
+        self.assertEqual(pair["total_to_32_eur"], 280)
+        self.assertEqual(unknown["total_to_32_eur"], 280)
+        self.assertIn("replaced", pair["ram_upgrade_note"])
+        self.assertIsNone(unknown["ram_modules"])
+
+    def test_ram_row_shows_layout_or_unknown(self):
+        lines = enricher.build_telegram_lines({"title": "HP EliteDesk 800 G4 Mini 16GB RAM 2x8GB"})
+        self.assertIn("RAM: <b>16 GB</b> (2×8 GB) · max 32 GB", lines)
+        lines = enricher.build_telegram_lines({"title": "HP EliteDesk 800 G4 Mini 16GB RAM"})
+        self.assertIn("RAM: <b>16 GB</b> (layout unknown) · max 32 GB", lines)
+
+    def test_full_slots_at_8gb_need_replacement(self):
+        result = enricher.analyze_hardware("Dell OptiPlex 7060 Micro 8GB RAM 2x4GB", price="100 EUR")
+        self.assertIn("both slots used", result["ram_upgrade_note"])
+
+
 if __name__ == "__main__":
     unittest.main()
