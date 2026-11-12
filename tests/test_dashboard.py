@@ -69,6 +69,58 @@ class QueryTests(unittest.TestCase):
         self.assertEqual(ids({"mode": "ram"}), ["5"])
         self.assertEqual(ids({"generation": "x", "min_price": "abc"}), ["3", "2", "1"])
 
+    def test_availability_filter_stats_and_timing(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        store = storage.Store(Path(directory.name) / "a.db")
+        seed(store)
+        # 1: seen for sale on day 2, sold by day 3; 2: already gone at the first check; 3: for sale.
+        store.record_availability("mini_pc", "1", "active", checked_at="2026-11-03T10:00:00Z")
+        store.record_availability("mini_pc", "1", "sold", "Venduto", checked_at="2026-11-04T10:00:00Z")
+        store.record_availability("mini_pc", "2", "closed", checked_at="2026-11-12T10:00:00Z")
+        store.record_availability("mini_pc", "3", "active", checked_at="2026-11-12T10:00:00Z")
+        store.close()
+        db = storage.connect(Path(directory.name) / "a.db", readonly=True)
+        self.addCleanup(db.close)
+        ids = lambda value: [i["item_id"] for i in dashboard.listings(db, {"availability": value})["items"]]  # noqa: E731
+        self.assertEqual(ids("for_sale"), ["3"])
+        self.assertEqual(ids("sold"), ["1"])
+        self.assertEqual(ids("gone"), ["2", "1"])
+        self.assertEqual(ids("unchecked"), [])
+        self.assertEqual(ids("nonsense"), ["3", "2", "1"])
+        detail = dashboard.listing_detail(db, "mini_pc", "1")
+        self.assertEqual(detail["time_to_close"], {"min_days": 2.0, "max_days": 3.0, "days": 2.5})
+        self.assertEqual(dashboard.listing_detail(db, "mini_pc", "2")["time_to_close"],
+                         {"min_days": 0.0, "max_days": 10.0, "days": None})
+        store = storage.Store(Path(directory.name) / "a.db")
+        store.record_listing("mini_pc", "6", "notified", seen_at="2026-11-03T09:00:00Z", title="M920q")
+        store.record_availability("mini_pc", "6", "sold", checked_at="2026-11-04T09:00:00Z")  # gone within a day
+        store.close()
+        self.assertEqual(dashboard.listing_detail(db, "mini_pc", "6")["time_to_close"],
+                         {"min_days": 0.0, "max_days": 1.0, "days": 0.5})
+        stats = dashboard.overview(db)["market"]["availability"]
+        self.assertEqual(stats, {"checked": 4, "for_sale": 1, "sold": 2, "gone": 3, "timed": 2,
+                                 "median_days_to_close": 1.5})
+
+    def test_unmigrated_database_still_works(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        path = Path(directory.name) / "old.db"
+        db = storage.connect(path)
+        db.executescript(storage.SCHEMA.replace(
+            "    availability TEXT, availability_label TEXT, availability_checked_at TEXT,\n"
+            "    last_active_at TEXT, closed_at TEXT,\n", ""))
+        db.execute("INSERT INTO listings (mode, item_id, status, first_seen, title) "
+                   "VALUES ('mini_pc', '1', 'notified', '2026-11-01T00:00:00Z', 'M720q')")
+        db.commit()
+        db.close()
+        db = storage.connect(path, readonly=True)
+        self.addCleanup(db.close)
+        self.assertIsNone(dashboard.listings(db, {})["items"][0]["availability"])
+        self.assertEqual(dashboard.listings(db, {"availability": "sold"})["total"], 0)
+        self.assertEqual(dashboard.listings(db, {"availability": "unchecked"})["total"], 1)
+        self.assertEqual(dashboard.overview(db)["market"]["availability"]["checked"], 0)
+
     def test_detail_runs_and_facets(self):
         detail = dashboard.listing_detail(self.db, "mini_pc", "2")
         self.assertEqual(detail["sections"][0]["rows"], ["RAM: 8 GB"])

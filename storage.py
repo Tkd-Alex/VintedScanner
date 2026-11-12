@@ -33,6 +33,13 @@ ANALYSIS_FIELDS = tuple(
     field for field in LISTING_FIELDS
     if field not in ("title", "price_eur", "url", "image_url", "matched_query", "description")
 )
+# Written only by the availability tracker, never by record_listing:
+# availability is one of availability.STATES (NULL = never read); checked_at is
+# the last check, readable or not; last_active_at the last check that saw it for
+# sale; closed_at the first check that saw it sold, closed or removed.
+AVAILABILITY_COLUMNS = (
+    "availability", "availability_label", "availability_checked_at", "last_active_at", "closed_at",
+)
 RUN_MODE_FIELDS = (
     "searches", "failed_searches", "skipped_searches", "listings", "new", "matches", "notified",
 )
@@ -77,13 +84,15 @@ CREATE TABLE IF NOT EXISTS listings (
     build_estimate_eur REAL,
     sections TEXT,
     score_version TEXT,
+    availability TEXT, availability_label TEXT, availability_checked_at TEXT,
+    last_active_at TEXT, closed_at TEXT,
     PRIMARY KEY (mode, item_id)
 );
 CREATE INDEX IF NOT EXISTS listings_status ON listings (mode, status);
 CREATE INDEX IF NOT EXISTS listings_notified ON listings (notified_at);
 CREATE INDEX IF NOT EXISTS runs_started ON runs (source, started_at);
 """
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 def utc_now() -> str:
@@ -120,6 +129,10 @@ class Store:
             # Version 2: which hardware_enricher.SCORING_VERSION produced the score.
             # Older rows stay NULL until rescore.py recalculates them.
             self.db.execute("ALTER TABLE listings ADD COLUMN score_version TEXT")
+        for column in AVAILABILITY_COLUMNS:
+            if column not in columns:
+                # Version 3: availability tracking (see availability.py).
+                self.db.execute(f"ALTER TABLE listings ADD COLUMN {column} TEXT")
 
     def close(self) -> None:
         self.db.close()
@@ -212,6 +225,48 @@ class Store:
                 {**values, "_mode": mode, "_item_id": str(item_id)},
             )
         return cursor.rowcount == 1
+
+    # -- availability -------------------------------------------------------
+    def listings_to_check(
+        self, mode: str, limit: int, checked_before: str, seen_after: str,
+    ) -> list[sqlite3.Row]:
+        """Alerted listings still for sale (or never checked) whose last check is old enough.
+
+        Never-checked listings come first, then the least recently checked;
+        listings first seen before ``seen_after`` are no longer followed.
+        """
+        rows = self.db.execute(
+            "SELECT item_id, url, title, first_seen, availability FROM listings"
+            " WHERE mode = ? AND status IN ('notified', 'dry_run') AND url IS NOT NULL"
+            " AND (availability IS NULL OR availability IN ('active', 'reserved'))"
+            " AND (availability_checked_at IS NULL OR availability_checked_at < ?)"
+            " AND first_seen >= ?"
+            " ORDER BY availability_checked_at IS NOT NULL, availability_checked_at, first_seen DESC"
+            " LIMIT ?",
+            (mode, checked_before, seen_after, limit),
+        )
+        return list(rows)
+
+    def record_availability(
+        self, mode: str, item_id: str, state: str | None, label: str | None = None,
+        checked_at: str | None = None,
+    ) -> None:
+        """Store one check; ``state`` None (unreadable page) only updates the check time."""
+        checked_at = checked_at or utc_now()
+        if state is None:
+            sql = "UPDATE listings SET availability_checked_at = :at"
+        elif state in ("active", "reserved"):
+            # Seen for sale again: any earlier "closed" reading no longer holds.
+            sql = ("UPDATE listings SET availability = :state, availability_label = :label,"
+                   " availability_checked_at = :at, last_active_at = :at, closed_at = NULL")
+        else:
+            sql = ("UPDATE listings SET availability = :state, availability_label = :label,"
+                   " availability_checked_at = :at, closed_at = COALESCE(closed_at, :at)")
+        with self.db:
+            self.db.execute(
+                sql + " WHERE mode = :mode AND item_id = :item_id",
+                {"state": state, "label": label, "at": checked_at, "mode": mode, "item_id": str(item_id)},
+            )
 
     def migrate_legacy_ledgers(self, ledgers: dict[str, Path], filtered: Path | None = None) -> int:
         """Import the old .txt ID ledgers once; the files are left untouched."""

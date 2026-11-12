@@ -21,7 +21,11 @@ class SchemaMigrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "old.db"
             old_schema = storage.SCHEMA.replace("    score_version TEXT,\n", "")
+            old_schema = old_schema.replace(
+                "    availability TEXT, availability_label TEXT, availability_checked_at TEXT,\n"
+                "    last_active_at TEXT, closed_at TEXT,\n", "")
             self.assertNotIn("score_version", old_schema)
+            self.assertNotIn("availability", old_schema)
             db = storage.connect(path)
             db.executescript(old_schema)
             db.execute("INSERT INTO listings (mode, item_id, status, first_seen, score) "
@@ -31,6 +35,8 @@ class SchemaMigrationTests(unittest.TestCase):
             store = storage.Store(path)
             row = store.db.execute("SELECT score, score_version FROM listings").fetchone()
             self.assertEqual((row["score"], row["score_version"]), (50, None))
+            columns = {r["name"] for r in store.db.execute("PRAGMA table_info(listings)")}
+            self.assertTrue(set(storage.AVAILABILITY_COLUMNS) <= columns)
             self.assertEqual(store.db.execute("PRAGMA user_version").fetchone()[0], storage.SCHEMA_VERSION)
             store.close()
             storage.Store(path).close()  # a second open is a no-op
@@ -56,6 +62,50 @@ class ReplaceAnalysisTests(StoreTestCase):
         with self.assertRaises(ValueError):
             self.store.replace_analysis("mini_pc", "1", {"title": "x"})
         self.assertFalse(self.store.replace_analysis("mini_pc", "missing", {"score": 1}))
+
+
+class AvailabilityStoreTests(StoreTestCase):
+    def add(self, item_id, seen_at, status="notified", url="https://www.vinted.it/items/x"):
+        self.store.record_listing("mini_pc", item_id, status, seen_at=seen_at, title=f"#{item_id}", url=url)
+
+    def test_selection_order_and_limits(self):
+        self.add("new", "2026-11-10T00:00:00Z")
+        self.add("old", "2026-11-01T00:00:00Z")
+        self.add("ancient", "2026-08-01T00:00:00Z")
+        self.add("filtered", "2026-11-10T00:00:00Z", status="filtered")
+        self.add("no_url", "2026-11-10T00:00:00Z", url=None)
+        self.add("recent_check", "2026-11-09T00:00:00Z")
+        self.add("sold", "2026-11-09T00:00:00Z")
+        self.store.record_availability("mini_pc", "recent_check", "active", checked_at="2026-11-12T09:00:00Z")
+        self.store.record_availability("mini_pc", "old", "active", checked_at="2026-11-11T00:00:00Z")
+        self.store.record_availability("mini_pc", "sold", "sold", checked_at="2026-11-10T00:00:00Z")
+        rows = self.store.listings_to_check("mini_pc", 10, "2026-11-11T12:00:00Z", "2026-09-28T00:00:00Z")
+        # Never checked first (newest first), then the least recently checked.
+        self.assertEqual([row["item_id"] for row in rows], ["new", "old"])
+        self.assertEqual(len(self.store.listings_to_check("mini_pc", 1, "2026-11-11T12:00:00Z", "2026-09-28T00:00:00Z")), 1)
+
+    def test_transitions_keep_the_sale_window(self):
+        self.add("1", "2026-11-01T00:00:00Z")
+        self.store.record_availability("mini_pc", "1", "active", checked_at="2026-11-02T00:00:00Z")
+        self.store.record_availability("mini_pc", "1", None, checked_at="2026-11-03T00:00:00Z")
+        row = self.store.db.execute("SELECT * FROM listings").fetchone()
+        self.assertEqual((row["availability"], row["availability_checked_at"]), ("active", "2026-11-03T00:00:00Z"))
+        self.store.record_availability("mini_pc", "1", "sold", "Venduto", checked_at="2026-11-04T00:00:00Z")
+        self.store.record_availability("mini_pc", "1", "sold", "Venduto", checked_at="2026-11-05T00:00:00Z")
+        row = self.store.db.execute("SELECT * FROM listings").fetchone()
+        self.assertEqual(
+            (row["availability"], row["availability_label"], row["last_active_at"], row["closed_at"]),
+            ("sold", "Venduto", "2026-11-02T00:00:00Z", "2026-11-04T00:00:00Z"),
+        )
+        self.store.record_availability("mini_pc", "1", "active", checked_at="2026-11-06T00:00:00Z")
+        row = self.store.db.execute("SELECT * FROM listings").fetchone()
+        self.assertEqual((row["availability"], row["closed_at"]), ("active", None))
+
+    def test_record_listing_never_touches_availability(self):
+        self.add("1", "2026-11-01T00:00:00Z")
+        self.store.record_availability("mini_pc", "1", "sold", checked_at="2026-11-04T00:00:00Z")
+        self.store.record_listing("mini_pc", "1", "notified", score=50)
+        self.assertEqual(self.store.db.execute("SELECT availability FROM listings").fetchone()[0], "sold")
 
 
 class ListingTests(StoreTestCase):

@@ -9,6 +9,7 @@ import smtplib
 import sqlite3
 import sys
 import time
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from email.message import EmailMessage
 from logging.handlers import RotatingFileHandler
@@ -19,6 +20,7 @@ import requests
 
 import Config
 import alert_parser
+import availability
 import hardware_enricher
 import message_format as fmt
 import run_report as report_module
@@ -164,6 +166,12 @@ MAX_DETAIL_RATE_LIMIT_WAIT_SECONDS = 120.0
 _detail_fetch_state = {"paused": False}
 # Catalogue searches stop for the rest of a run after repeated HTTP 429.
 _catalog_state = {"paused": False}
+# Availability tracker: how many alerted listings to re-check per run, how often
+# each one is re-checked, and for how long after the alert it is followed.
+DEFAULT_AVAILABILITY_CHECKS_PER_RUN = 10
+MAX_AVAILABILITY_CHECKS_PER_RUN = 50
+DEFAULT_AVAILABILITY_RECHECK_HOURS = 20.0
+DEFAULT_AVAILABILITY_MAX_AGE_DAYS = 45.0
 DEFAULT_TELEGRAM_SEND_DELAY_SECONDS = 1.0
 TELEGRAM_DEFAULT_RETRY_SECONDS = 5.0
 TELEGRAM_MAX_RETRY_SECONDS = 30.0
@@ -1414,6 +1422,74 @@ def process_cpu_hunt_queries(
     return processing_failed
 
 
+def load_availability_configuration():
+    """Return (checks per run, recheck hours, max age days); 0 checks means disabled."""
+    if not getattr(Config, "availability_check_enabled", True):
+        return 0, DEFAULT_AVAILABILITY_RECHECK_HOURS, DEFAULT_AVAILABILITY_MAX_AGE_DAYS
+    try:
+        per_run = int(getattr(Config, "availability_checks_per_run", DEFAULT_AVAILABILITY_CHECKS_PER_RUN))
+        recheck_hours = float(getattr(Config, "availability_recheck_hours", DEFAULT_AVAILABILITY_RECHECK_HOURS))
+        max_age_days = float(getattr(Config, "availability_max_age_days", DEFAULT_AVAILABILITY_MAX_AGE_DAYS))
+    except (TypeError, ValueError):
+        logging.warning("Invalid availability settings; using the defaults")
+        per_run = DEFAULT_AVAILABILITY_CHECKS_PER_RUN
+        recheck_hours = DEFAULT_AVAILABILITY_RECHECK_HOURS
+        max_age_days = DEFAULT_AVAILABILITY_MAX_AGE_DAYS
+    per_run = max(0, min(per_run, MAX_AVAILABILITY_CHECKS_PER_RUN))
+    return per_run, max(recheck_hours, 1.0), max(max_age_days, 1.0)
+
+
+def _utc_iso(moment):
+    return moment.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def process_availability_checks(session, dry_run=False):
+    """Re-check a few alerted mini-PC listings and record whether they are still for sale.
+
+    Runs after the searches, which always take priority. A small batch per run,
+    with the same delay as listing-page requests; the first HTTP 429 stops the
+    checks (and listing-page requests) for the rest of the run. Dry runs skip it.
+    """
+    per_run, recheck_hours, max_age_days = load_availability_configuration()
+    if dry_run or per_run == 0:
+        return
+    stats = run_report.availability
+    if _detail_fetch_state["paused"] or _catalog_state["paused"]:
+        stats.skipped = True
+        return
+    now = datetime.now(timezone.utc)
+    rows = store.listings_to_check(
+        "mini_pc", per_run,
+        checked_before=_utc_iso(now - timedelta(hours=recheck_hours)),
+        seen_after=_utc_iso(now - timedelta(days=max_age_days)),
+    )
+    for row in rows:
+        wait_before_detail_fetch()
+        try:
+            status = availability.check_listing(
+                row["url"], row["item_id"], session, headers=build_detail_headers()
+            )
+        except availability.AvailabilityRateLimited:
+            _detail_fetch_state["paused"] = True
+            stats.stopped = True
+            logging.warning("Vinted rate-limited availability checks; stopping them for this run")
+            run_report.add_issue(
+                "rate_limit", "Availability checks rate-limited; the rest wait for the next run"
+            )
+            break
+        except Exception as error:  # one listing must not stop the others
+            stats.errors += 1
+            store.record_availability("mini_pc", row["item_id"], None)
+            run_report.add_issue(
+                "listing_page", f"Availability of “{row['title']}”: {describe_request_error(error)}"
+            )
+            continue
+        store.record_availability("mini_pc", row["item_id"], status.state, status.label)
+        stats.count(status.state)
+        if status.state in availability.FINAL_STATES:
+            logging.info("Listing %s is now %s (%s)", row["item_id"], status.state, row["title"])
+
+
 def initialize_vinted_session(marketplace_url):
     """Initialize an anonymous Vinted web session."""
     session = requests.Session()
@@ -1626,6 +1702,8 @@ def run_scan(dry_run=False):
                 seen_ids["cpu"], dry_run, cpu_hunt_targets,
             )
             query_failed = query_failed or cpu_hunt_failed
+        # Availability problems are reported but never fail the run.
+        process_availability_checks(session, dry_run)
     except (OSError, sqlite3.Error) as error:
         logging.error("Unable to update the local database: %s", error)
         run_report.add_issue("local_database", str(error), fatal=True)

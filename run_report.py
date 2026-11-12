@@ -52,6 +52,31 @@ class ModeStats:
     notified: int = 0
 
 
+@dataclass
+class AvailabilityStats:
+    """Outcome of the availability checks of alerted listings in one run."""
+
+    active: int = 0
+    reserved: int = 0
+    sold: int = 0
+    closed: int = 0
+    removed: int = 0
+    unreadable: int = 0
+    errors: int = 0
+    skipped: bool = False  # not started because Vinted already rate-limited this run
+    stopped: bool = False  # interrupted by a rate limit
+
+    def count(self, state: str | None) -> None:
+        if state is None:
+            self.unreadable += 1
+        else:
+            setattr(self, state, getattr(self, state) + 1)
+
+    @property
+    def checked(self) -> int:
+        return self.active + self.reserved + self.sold + self.closed + self.removed + self.unreadable
+
+
 class RunReport:
     """Mutable record of a single scanner run."""
 
@@ -61,6 +86,7 @@ class RunReport:
         self.started_at = datetime.now()
         self.modes: dict[str, ModeStats] = {}
         self.issues: dict[str, list[str]] = {}
+        self.availability = AvailabilityStats()
         self.fatal = False
 
     def mode(self, label: str) -> ModeStats:
@@ -102,6 +128,9 @@ class RunReport:
         lines = [self.headline(dry_run)]
         for label, stats in self.modes.items():
             lines.append(_mode_line(label, stats))
+        availability_line = _availability_line(self.availability)
+        if availability_line:
+            lines.append(availability_line)
         for kind, messages in self.issues.items():
             title = ISSUE_TITLES.get(kind, f"❗ {kind}")
             count = f" ×{len(messages)}" if len(messages) > 1 else ""
@@ -143,6 +172,26 @@ def _mode_line(label: str, stats: ModeStats) -> str:
     if stats.skipped_searches:
         details.append(f"{stats.skipped_searches} skipped")
     return f"• {fmt.esc(label)}: {outcome} · " + ", ".join(details)
+
+
+def _availability_line(stats: AvailabilityStats) -> str | None:
+    """"• Availability: 10 checked · 2 sold, 1 closed", or None when nothing happened."""
+    if stats.skipped:
+        return "• Availability: <b>not checked</b> · Vinted was rate-limiting this run"
+    if not stats.checked and not stats.errors and not stats.stopped:
+        return None
+    changes = [
+        f"{getattr(stats, state)} {state}" for state in ("sold", "closed", "removed", "reserved")
+        if getattr(stats, state)
+    ]
+    if stats.unreadable:
+        changes.append(f"{stats.unreadable} unreadable")
+    if stats.errors:
+        changes.append(f"{stats.errors} failed")
+    if stats.stopped:
+        changes.append("stopped by rate limit")
+    outcome = ", ".join(changes) if changes else "all still for sale"
+    return f"• Availability: {stats.checked} checked · {outcome}"
 
 
 def _shorten(text: str) -> str:

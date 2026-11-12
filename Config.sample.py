@@ -39,6 +39,19 @@ hardware_fetch_details = True
 # Pause (seconds) before each listing-page request.
 hardware_detail_fetch_delay_seconds = 2.0
 
+# Availability tracker: after the searches, re-open a few alerted mini-PC
+# listings to record whether they are still for sale, reserved, sold, closed or
+# removed, so the dashboard can show how fast each model sells. It uses the
+# pause above between pages, stops at the first HTTP 429 and is skipped when
+# the run was already rate-limited, and on --dry-run.
+availability_check_enabled = True
+# Listings re-checked per run (max 50); hourly runs × 10 cover ~240 a day.
+availability_checks_per_run = 10
+# Re-check each listing at most this often; the sale date is known to this precision.
+availability_recheck_hours = 20
+# Stop following a listing this many days after it was first seen.
+availability_max_age_days = 45
+
 # Notify listings from the supported HP Mini / Lenovo Tiny / Dell Micro chassis families.
 hardware_require_target_models = True
 # Add broad model searches (M700/M710/M720/M920, EliteDesk/ProDesk Mini, OptiPlex Micro)

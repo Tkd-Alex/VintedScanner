@@ -363,6 +363,31 @@ message, become runs. Messages in the older alert format are skipped and
 counted. The import can be repeated safely: nothing is duplicated. Keep the
 export out of Git; it contains your chat history.
 
+### Availability tracker: is it still for sale?
+
+After the searches, each run re-opens a few alerted mini-PC listings
+(`availability_checks_per_run`, default 10) and records whether each is still
+for sale, **reserved**, **sold**, **closed** or **removed**. Each listing is
+re-checked about once a day (`availability_recheck_hours`, default 20) for 45
+days after its alert (`availability_max_age_days`). The state comes from the
+public listing page: Vinted marks a completed sale ("Venduto"), so a sold
+listing is told apart from one the seller closed, whose reason is not shown;
+a page that no longer exists (HTTP 404) counts as removed. Set
+`availability_check_enabled = False` to turn it off.
+
+The checks run after every search, use the same pause as listing-page requests
+and stop at the first HTTP 429, so they never take priority over finding new
+listings; they are skipped on `--dry-run` and when the run was already
+rate-limited. The run summary gets a line such as
+`• Availability: 10 checked · 2 sold`.
+
+Vinted does not publish the sale date, so it is known only to the precision of
+the checks: the dashboard shows "between 0.5 and 1.2 days after it was first
+seen". The overview's **How fast they sell** table gives, per platform, how
+many listings are still for sale or gone and the median days until gone,
+counting only listings whose sale is known to within 1.5 days. The Mini PC page
+can filter by availability; sold, closed and removed listings are greyed out.
+
 ### Recalculating scores after a rule change
 
 Scores are stored when an alert is sent, so after an update that changes

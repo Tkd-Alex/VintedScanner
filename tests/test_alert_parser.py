@@ -180,6 +180,14 @@ class RunSummaryTests(unittest.TestCase):
         self.assertEqual(data["duration_s"], 0)
         self.assertEqual([kind for kind, _ in data["issues"]], ["rate_limit", "rate_limit", "notification"])
 
+    def test_availability_line_is_not_read_as_a_mode(self):
+        report = self.report()
+        report.availability.sold, report.availability.active = 1, 9
+        text = fmt.to_plain_text(report.build_message())
+        self.assertIn("• Availability: 10 checked · 1 sold", text)
+        [data] = alert_parser.parse_run_summaries(text)
+        self.assertEqual(set(data["modes"]), {"mini_pc", "ram"})
+
     def test_late_delivery_contains_every_report(self):
         messages = [self.report().build_message(), run_report.RunReport(clock=lambda: 0.0).build_message()]
         text = fmt.to_plain_text(run_report.build_late_delivery_message(messages))
