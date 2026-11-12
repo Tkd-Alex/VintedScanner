@@ -515,6 +515,8 @@ def save_listing(mode, item, status, seen_ids, matched_query=None, alert=None, f
     if alert:
         fields = alert_parser.parse_alert(alert_plain_text(item, *alert, matched_query)) or {}
         fields.pop("mode", None)
+        if mode == "mini_pc":
+            fields["score_version"] = hardware_enricher.SCORING_VERSION
     fields.update(
         title=item["title"], url=item["url"], image_url=item["image"],
         price_eur=item_price_eur(item), matched_query=matched_query,

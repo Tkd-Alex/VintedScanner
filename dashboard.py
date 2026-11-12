@@ -11,6 +11,11 @@ Serves the static UI in ``dashboard/`` and a small JSON API:
                      &min_price=&max_price=&sort=&limit=&offset=
     GET /api/listings/<mode>/<item_id>     one listing with every alert section
     GET /api/runs?limit=&offset=           scanner runs with counters and issues
+    GET /api/references                    reference CPUs for benchmark comparisons
+
+Benchmarks are not stored in the database: SQL functions look them up in
+hardware_enricher.CPU_CATALOG by CPU name, so every listing, including history
+restored from Telegram, gets them without a migration.
 """
 from __future__ import annotations
 
@@ -19,11 +24,13 @@ import json
 import logging
 import sqlite3
 import statistics
+from functools import lru_cache
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
+import hardware_enricher
 import storage
 
 PROJECT_DIR = Path(__file__).resolve().parent
@@ -48,14 +55,62 @@ SORTS = {
     "score": "score IS NULL, score DESC, price_eur ASC",
     # Score points per euro of the 16 GB build: cheap, capable machines first.
     "value": "score IS NULL, CAST(score AS REAL) / COALESCE(total_16_eur, price_eur, 1e9) DESC",
+    # PassMark multithread points per euro of the 16 GB build.
+    "perf_value": "cpu_bench_mt(cpu) IS NULL,"
+                  " CAST(cpu_bench_mt(cpu) AS REAL) / COALESCE(total_16_eur, price_eur, 1e9) DESC",
+    "fastest": "cpu_bench_mt(cpu) IS NULL, cpu_bench_mt(cpu) DESC, price_eur ASC",
 }
 CARD_COLUMNS = (
     "mode, item_id, status, source, first_seen, notified_at, run_id, title, price_eur, url, image_url, "
     "matched_query, score, upgrade_score, verdict, tier, model, platform, generation, cpu, cores, "
     "threads, ram_gb, storage, gpu, total_16_eur, total_32_eur, total_16_cpu_eur, total_32_cpu_eur, "
-    "build_estimate_eur"
+    "build_estimate_eur, cpu_bench_mt(cpu) AS bench_mt, cpu_bench_st(cpu) AS bench_st"
 )
 MAX_LIMIT = 200
+
+
+@lru_cache(maxsize=512)
+def _benchmark(cpu_name):
+    return hardware_enricher.benchmark_for_name(cpu_name) or {}
+
+
+def register_functions(db: sqlite3.Connection) -> sqlite3.Connection:
+    """Expose catalog benchmarks to SQL as cpu_bench_mt(cpu) and cpu_bench_st(cpu)."""
+    db.create_function("cpu_bench_mt", 1, lambda cpu: _benchmark(cpu).get("mt"), deterministic=True)
+    db.create_function("cpu_bench_st", 1, lambda cpu: _benchmark(cpu).get("st"), deterministic=True)
+    return db
+
+
+def references() -> dict:
+    """Reference CPUs (Config.hardware_reference_cpus, else the defaults)."""
+    try:
+        import Config
+        keys = getattr(Config, "hardware_reference_cpus", None)
+    except ImportError:
+        keys = None
+    return {
+        "items": hardware_enricher.reference_cpus(keys),
+        "source": f"{hardware_enricher.BENCHMARK_SOURCE} ({hardware_enricher.BENCHMARK_VERSION})",
+    }
+
+
+def _build_cost(listing: dict):
+    """16 GB build cost, else the asking price."""
+    return listing.get("total_16_eur") if listing.get("total_16_eur") is not None else listing.get("price_eur")
+
+
+def value_frontier(listings: list[dict]) -> list[str]:
+    """Item ids no other listing beats on both build cost and multithread benchmark."""
+    points = sorted(
+        (listing for listing in listings if listing.get("bench_mt") and _build_cost(listing) is not None),
+        key=lambda listing: (_build_cost(listing), -listing["bench_mt"]),
+    )
+    frontier, best = [], 0
+    for listing in points:
+        if listing["bench_mt"] > best:
+            frontier.append(listing["item_id"])
+            best = listing["bench_mt"]
+    return frontier
 
 
 def _placeholders(values) -> str:
@@ -76,6 +131,7 @@ def _number(value, cast=float):
 
 # -- queries -----------------------------------------------------------------
 def overview(db: sqlite3.Connection) -> dict:
+    register_functions(db)
     alerts = _placeholders(ALERT_STATUSES)
     modes = {}
     for mode in storage.MODE_LABELS:
@@ -108,6 +164,7 @@ def overview(db: sqlite3.Connection) -> dict:
         "runs": {key: runs[key] or 0 for key in ("total", "ok", "problems", "failed")},
         "last_run": dict(last_run) if last_run else None,
         "market": market_stats(market),
+        "references": references(),
         "daily": [dict(row) for row in daily],
     }
 
@@ -127,6 +184,12 @@ def market_stats(listings: list[dict]) -> dict:
                 "median_total_32": _median(i["total_32_eur"] for i in items),
                 "median_score": _median(i["score"] for i in items),
                 "best_score": max((i["score"] for i in items if i["score"] is not None), default=None),
+                "median_bench_mt": _median(i.get("bench_mt") for i in items),
+                # Median euros of the 16 GB build per 1,000 PassMark multithread points.
+                "eur_per_1k_mt": _median(
+                    _build_cost(i) / i["bench_mt"] * 1000
+                    for i in items if i.get("bench_mt") and _build_cost(i) is not None
+                ),
             }
             for name, items in groups.items() if name is not None
         ]
@@ -139,6 +202,7 @@ def market_stats(listings: list[dict]) -> dict:
     scored = [listing for listing in listings if listing["score"] is not None]
     with_32 = [listing for listing in listings if listing["total_32_eur"] is not None]
     value_key = lambda i: i["score"] / (i["total_16_eur"] or i["price_eur"] or 1e9)  # noqa: E731
+    benchmarked = [i for i in listings if i.get("bench_mt") and _build_cost(i)]
     return {
         "count": len(listings),
         "median_price": _median(i["price_eur"] for i in listings),
@@ -151,6 +215,9 @@ def market_stats(listings: list[dict]) -> dict:
         "best_value": sorted(scored, key=value_key, reverse=True)[:6],
         "cheapest_32": sorted(with_32, key=lambda i: i["total_32_eur"])[:6],
         "top_score": sorted(scored, key=lambda i: (-i["score"], i["price_eur"] or 0))[:6],
+        "best_perf_value": sorted(benchmarked, key=lambda i: i["bench_mt"] / _build_cost(i), reverse=True)[:6],
+        "value_frontier": value_frontier(listings),
+        "benchmarked": len(benchmarked),
     }
 
 
@@ -176,6 +243,7 @@ def facets(db: sqlite3.Connection, mode: str) -> dict:
 
 
 def listings(db: sqlite3.Connection, params: dict[str, str]) -> dict:
+    register_functions(db)
     mode = params.get("mode", "mini_pc")
     statuses = STATUS_GROUPS.get(params.get("status", "alerts"), ALERT_STATUSES)
     where = [f"mode = ?", f"status IN ({_placeholders(statuses)})"]
@@ -196,6 +264,10 @@ def listings(db: sqlite3.Connection, params: dict[str, str]) -> dict:
     if _number(params.get("max_price")) is not None:
         where.append("price_eur <= ?")
         args.append(float(params["max_price"]))
+    for param, column in (("min_threads", "threads"), ("min_ram", "ram_gb"), ("min_mt", "cpu_bench_mt(cpu)")):
+        if _number(params.get(param)) is not None:
+            where.append(f"{column} >= ?")
+            args.append(float(params[param]))
     if _number(params.get("run_id"), int) is not None:
         where.append("run_id = ?")
         args.append(int(params["run_id"]))
@@ -217,6 +289,12 @@ def listing_detail(db: sqlite3.Connection, mode: str, item_id: str) -> dict | No
         return None
     data = dict(row)
     data["sections"] = json.loads(data["sections"]) if data["sections"] else []
+    # False for scores from older rules (not yet recalculated by rescore.py).
+    data["score_current"] = data.get("score_version") == hardware_enricher.SCORING_VERSION
+    benchmark = _benchmark(data.get("cpu"))
+    data["bench_mt"], data["bench_st"] = benchmark.get("mt"), benchmark.get("st")
+    data["vs_reference"] = hardware_enricher.compare_to_references(
+        benchmark or None, references()["items"]) if benchmark else []
     return data
 
 
@@ -288,6 +366,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return listing_detail(db, parts[1], parts[2])
         if parts == ["runs"]:
             return runs(db, params)
+        if parts == ["references"]:
+            return references()
         return None
 
     def send_static(self, name):

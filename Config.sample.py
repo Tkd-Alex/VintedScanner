@@ -55,6 +55,8 @@ hardware_discovery_price_to = 400
 # €130: planning allowance for a 2x16 GB DDR4 kit.
 hardware_ram_8gb_upgrade_eur = 50
 hardware_ram_32gb_kit_eur = 130
+# €65: one extra 16 GB SO-DIMM, used only when a listing states 1×16 GB installed.
+hardware_ram_16gb_module_eur = 65
 
 # Optional CPU price map. Keys are normalized CPU model identifiers.
 # €68 for i7-6700T is based on the Vinted listing observed in Nov 2026
@@ -63,6 +65,15 @@ hardware_ram_32gb_kit_eur = 130
 hardware_cpu_upgrade_costs_eur = {
     "i76700t": 68,
 }
+
+# Reference CPUs for the "Bench:" comparison line (catalog keys or names such as
+# "i5-12500T"). Defaults: N100 = current homelab node, i5-12500T = target CPU.
+# They are comparison anchors only, never a notification filter.
+hardware_reference_cpus = ["n100", "i512500t"]
+
+# Relative weights of the informational mini-PC score, rescaled to 100 points.
+# Scores never decide whether a listing is notified.
+hardware_score_weights = {"cpu": 40, "price": 25, "ram": 10, "storage": 10, "platform": 15}
 
 # Vinted search queries
 # "search_text" may be empty when searching only by filters.

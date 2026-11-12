@@ -16,6 +16,48 @@ class StoreTestCase(unittest.TestCase):
         self.addCleanup(self.store.close)
 
 
+class SchemaMigrationTests(unittest.TestCase):
+    def test_version_1_database_gains_score_version_and_keeps_rows(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "old.db"
+            old_schema = storage.SCHEMA.replace("    score_version TEXT,\n", "")
+            self.assertNotIn("score_version", old_schema)
+            db = storage.connect(path)
+            db.executescript(old_schema)
+            db.execute("INSERT INTO listings (mode, item_id, status, first_seen, score) "
+                       "VALUES ('mini_pc', '1', 'notified', '2026-11-01T00:00:00Z', 50)")
+            db.commit()
+            db.close()
+            store = storage.Store(path)
+            row = store.db.execute("SELECT score, score_version FROM listings").fetchone()
+            self.assertEqual((row["score"], row["score_version"]), (50, None))
+            self.assertEqual(store.db.execute("PRAGMA user_version").fetchone()[0], storage.SCHEMA_VERSION)
+            store.close()
+            storage.Store(path).close()  # a second open is a no-op
+
+
+class ReplaceAnalysisTests(StoreTestCase):
+    def test_overwrites_analysis_including_nulls_and_keeps_identity(self):
+        self.store.record_listing(
+            "mini_pc", "1", "notified", title="EliteDesk 705 G5", price_eur=100.0,
+            description="RAM : 8 Go", ram_gb=500, score=54, cpu="Ryzen",
+        )
+        changed = self.store.replace_analysis(
+            "mini_pc", "1", {"ram_gb": 8, "score": 50, "cpu": None, "sections": [{"title": "x", "rows": []}],
+                             "score_version": "1"},
+        )
+        self.assertTrue(changed)
+        row = self.store.db.execute("SELECT * FROM listings WHERE item_id = '1'").fetchone()
+        self.assertEqual((row["ram_gb"], row["score"], row["cpu"], row["score_version"]), (8, 50, None, "1"))
+        self.assertEqual((row["status"], row["title"], row["description"]), ("notified", "EliteDesk 705 G5", "RAM : 8 Go"))
+        self.assertEqual(json.loads(row["sections"]), [{"title": "x", "rows": []}])
+
+    def test_rejects_identity_fields_and_reports_missing_rows(self):
+        with self.assertRaises(ValueError):
+            self.store.replace_analysis("mini_pc", "1", {"title": "x"})
+        self.assertFalse(self.store.replace_analysis("mini_pc", "missing", {"score": 1}))
+
+
 class ListingTests(StoreTestCase):
     def test_seen_ids_follow_status_and_mode(self):
         for item_id, status in [("1", "notified"), ("2", "dry_run"), ("3", "ignored"), ("4", "failed")]:

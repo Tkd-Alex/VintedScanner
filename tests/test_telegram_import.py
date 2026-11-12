@@ -46,6 +46,55 @@ EXPORT = {"messages": [
 ]}
 
 
+# Alert layout since the benchmark phase: Bench row, architecture, RAM layout.
+NEW_ALERT = (
+    "🟢 74/100 · Strong candidate\n"
+    "Lenovo ThinkCentre M70q Gen 3 Tiny i5-12400T 16GB 2x8GB\n"
+    "💶 €290  ·  🔗 Open listing  ·  📷 Photo\n"
+    "🔍 ThinkCentre Tiny\n\n"
+    "🖥 Hardware\n"
+    "CPU: Intel Core i5-12400T · 6 core / 12 thread · nominal TDP 35 W · Alder Lake, 2022\n"
+    "Bench: ST 3,331 · MT 15,575 · ×2.9 N100 · ×1.0 i5-12500T\n"
+    "RAM: 16 GB (2×8 GB) · max 64 GB\n"
+    "Base: Lenovo ThinkCentre M70q Gen 3 Tiny · 12th gen Intel · no PCIe · CPU ≤35 W\n\n"
+    "📊 Score breakdown\n"
+    "CPU 30/40 · Price 20/25 · RAM 8/10 · Disk 3/10 · Platform 13/15"
+)
+NEW_LINKS = [
+    {"type": "text_link", "text": "Open listing", "href": "https://www.vinted.it/items/20000000001-m70q"},
+]
+
+
+class MixedLayoutImportTests(unittest.TestCase):
+    def test_old_and_new_alert_layouts_import_side_by_side(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        export_path = Path(directory.name) / "result.json"
+        db_path = Path(directory.name) / "test.db"
+        export = {"messages": [message(ALERT, 1793736010, ALERT),
+                               message(NEW_ALERT, 1793736100, NEW_LINKS)]}
+        export_path.write_text(json.dumps(export, ensure_ascii=False), encoding="utf-8")
+
+        def run():
+            with redirect_stdout(io.StringIO()):
+                self.assertEqual(telegram_import.main([str(export_path), "--db", str(db_path)]), 0)
+            store = storage.Store(db_path)
+            try:
+                return {row["item_id"]: dict(row) for row in store.db.execute("SELECT * FROM listings")}
+            finally:
+                store.close()
+
+        first = run()
+        old, new = first["10654669373"], first["20000000001"]
+        self.assertEqual((old["cpu"], old["cores"], old["threads"], old["ram_gb"]), ("Intel Core i5-8500T", 6, 6, 8))
+        self.assertEqual((new["cpu"], new["cores"], new["threads"], new["ram_gb"]), ("Intel Core i5-12400T", 6, 12, 16))
+        self.assertEqual((new["score"], new["platform"], new["generation"]),
+                         (74, "Lenovo ThinkCentre M70q Gen 3 Tiny", 12))
+        self.assertIn("Bench: ST 3,331 · MT 15,575 · ×2.9 N100 · ×1.0 i5-12500T", new["sections"])
+        second = run()
+        self.assertEqual(first, second)
+
+
 class ImportTests(unittest.TestCase):
     def setUp(self):
         directory = tempfile.TemporaryDirectory()

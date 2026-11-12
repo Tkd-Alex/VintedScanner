@@ -32,6 +32,44 @@ def mini_pc_alert(title, description, price="150.0 EUR", costs=None):
     return item["hardware_analysis"], alert_parser.parse_alert(text)
 
 
+OLD_LAYOUT_ALERT = """\
+🟢 70/100 · Strong candidate
+Lenovo ThinkCentre M920q Tiny i5-8500T 16GB RAM 256GB SSD
+💶 €150  ·  🔗 Open listing  ·  📷 Photo
+🔍 ThinkCentre Tiny
+
+🖥 Hardware
+CPU: Intel Core i5-8500T · 6 core / 6 thread · nominal TDP 35 W
+RAM: 16 GB · max 32 GB
+Disk: 256 GB SSD
+GPU: Intel UHD Graphics 630
+Base: Lenovo ThinkCentre M920q Tiny · 8th gen Intel · PCIe slot · CPU ≤65 W
+vPro/AMT: likely: vPro chipset and vPro CPU (check AMT is enabled in BIOS)
+
+💰 Cost (excl. shipping/fees)
+With 16 GB: €150
+With 32 GB: €280
+16 GB + CPU upgrade: incomplete — add a CPU price to hardware_cpu_upgrade_costs_eur
+
+🔧 CPU upgrade
+Candidate: Intel Core i7-8700T · 6 core / 12 thread · 35 W
+CPU budget: not configured — check current listings
+Upgrade score: pending — CPU upgrade price not configured
+   Lenovo PSREF includes an M920q configuration with i7-8700T; 6 cores / 12 threads.
+   Verify exact MTM/BIOS/PSU and cooling before buying a CPU.
+
+📊 Score breakdown
+CPU 17/40 · Price 25/25 · RAM 8/10 · Disk 5/10 · Platform 15/15
+
+🤖 AI: Basic integrated graphics; local AI mostly on CPU with small models.
+
+🔎 To check
+• check maximum RAM, free slots, power adapter and actual condition
+• check storage expansion and compatibility of any upgrade
+Specs are inferred from listing text and the local CPU catalog; verify with the seller.
+"""
+
+
 class MiniPcAlertTests(unittest.TestCase):
     def test_known_platform_alert_round_trips(self):
         analysis, data = mini_pc_alert(
@@ -63,6 +101,28 @@ class MiniPcAlertTests(unittest.TestCase):
         self.assertIsNotNone(analysis["upgrade_score"])
         self.assertEqual(data["upgrade_score"], analysis["upgrade_score"])
         self.assertEqual(data["total_16_cpu_eur"], analysis["total_to_16_with_cpu_eur"])
+
+    def test_alert_shows_benchmark_row_and_still_parses_cpu(self):
+        analysis, data = mini_pc_alert(
+            "HP ProDesk 400 G5 Mini i5-9500T 16GB RAM 256GB NVMe", "", price="220 EUR",
+        )
+        hardware = next(section for section in data["sections"] if section["title"] == "🖥 Hardware")
+        bench = next(row for row in hardware["rows"] if row.startswith("Bench: "))
+        self.assertIn("MT 8,008", bench)
+        self.assertIn("N100", bench)
+        self.assertEqual(data["cpu"], "Intel Core i5-9500T")
+        self.assertEqual((data["cores"], data["threads"]), (6, 6))
+
+    def test_alert_from_before_benchmarks_still_parses(self):
+        # A real alert layout sent before the Bench row and architecture existed;
+        # Telegram history (and telegram_import.py) still contains these.
+        data = alert_parser.parse_alert(OLD_LAYOUT_ALERT)
+        self.assertEqual((data["mode"], data["score"], data["verdict"]), ("mini_pc", 70, "Strong candidate"))
+        self.assertEqual(data["cpu"], "Intel Core i5-8500T")
+        self.assertEqual((data["cores"], data["threads"], data["ram_gb"]), (6, 6, 16))
+        self.assertEqual(data["storage"], "256 GB SSD")
+        self.assertEqual((data["platform"], data["generation"]), ("Lenovo ThinkCentre M920q Tiny", 8))
+        self.assertEqual((data["total_16_eur"], data["total_32_eur"]), (150.0, 280.0))
 
     def test_unrelated_text_is_not_an_alert(self):
         self.assertIsNone(alert_parser.parse_alert("HP EliteDesk 800 G3 Mini\n🏷️ 100.00 EUR"))

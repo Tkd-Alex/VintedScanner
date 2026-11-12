@@ -22,20 +22,33 @@ MAX_DESCRIPTION_CHARS = 520
 MAX_ANALYSIS_TEXT_CHARS = 5000
 DEFAULT_RAM_8GB_UPGRADE_EUR = 50
 DEFAULT_RAM_32GB_KIT_EUR = 130
+DEFAULT_RAM_16GB_MODULE_EUR = 65
+RAM_MODULE_SIZES_GB = {2, 4, 8, 16, 32, 64}
 PLAUSIBLE_RAM_SIZES_GB = {2, 4, 6, 8, 12, 16, 20, 24, 32, 40, 48, 64}
 
-# Score weights: CPU_PERFORMANCE_POINTS (0-50 tiers) are scaled to 40 points.
+# Score weights: CPU performance (a 0-1 fraction) is scaled to 40 points.
 CPU_WEIGHT = 0.8
+# Benchmark-based CPU performance: PassMark multithread and single-thread ratings
+# blended 70/30, each relative to a ceiling CPU that earns full points. Faster
+# parts are capped at full points rather than extending the scale.
+BENCHMARK_CEILING_CPU = "i712700t"
+BENCHMARK_MT_SHARE = 0.7
+# Comparison anchors shown in alerts (catalog keys or CPU names): the current
+# homelab node and the CPU the next node is aimed at. Not minimum requirements.
+DEFAULT_REFERENCE_CPUS = ("n100", "i512500t")
 # Unknown CPU on a known platform: typical CPU points discounted for uncertainty.
 ESTIMATED_CPU_FACTOR = 0.7
 # Unknown CPU on an unknown platform: neutral, not worse than a Celeron.
 UNKNOWN_CPU_POINTS = 8
+# Default maximum points per score component; they add up to 100. Override
+# with hardware_score_weights in Config.py: values are relative weights and are
+# rescaled to a 100-point total.
+DEFAULT_SCORE_WEIGHTS: dict[str, float] = {"cpu": 40, "price": 25, "ram": 10, "storage": 10, "platform": 15}
 STRONG_CANDIDATE_SCORE = 70
 WORTH_EVALUATING_SCORE = 55
 
-# Relative CPU capability points on the 0-50 portion of the ranking. These are
-# curated tiers for this use case, not benchmark results. Update when the local
-# CPU catalog is extended or better model-specific data becomes available.
+# Fallback CPU capability tiers (0-50), used only for a CPU without benchmark
+# data in CPU_BENCHMARKS. These are curated heuristics, not benchmark results.
 CPU_PERFORMANCE_POINTS: dict[str, int] = {
     "g3900t": 2, "g3930t": 2, "g4400t": 3, "g4500t": 3,
     "g4560t": 4, "g4600t": 4, "g4900t": 3, "g4930t": 3,
@@ -143,7 +156,99 @@ CPU_CATALOG: dict[str, dict[str, Any]] = {
     "ryzen7pro5750ge": {"name": "AMD Ryzen 7 PRO 5750GE", "cores": 8, "threads": 16, "tdp_w": 35, "gpu": "Radeon Vega 8 Graphics"},
     "ryzen56600h": {"name": "AMD Ryzen 5 6600H", "cores": 6, "threads": 12, "tdp_w": 45, "gpu": "AMD Radeon 660M"},
     "ryzen76800h": {"name": "AMD Ryzen 7 6800H", "cores": 8, "threads": 16, "tdp_w": 45, "gpu": "AMD Radeon 680M"},
+    "i511400t": {"name": "Intel Core i5-11400T", "cores": 6, "threads": 12, "tdp_w": 35, "gpu": "Intel UHD Graphics 730"},
+    "i511600t": {"name": "Intel Core i5-11600T", "cores": 6, "threads": 12, "tdp_w": 35, "gpu": "Intel UHD Graphics 750"},
+    "i312100t": {"name": "Intel Core i3-12100T", "cores": 4, "threads": 8, "tdp_w": 35, "gpu": "Intel UHD Graphics 730"},
+    "i512400t": {"name": "Intel Core i5-12400T", "cores": 6, "threads": 12, "tdp_w": 35, "gpu": "Intel UHD Graphics 730"},
+    "i512600t": {"name": "Intel Core i5-12600T", "cores": 6, "threads": 12, "tdp_w": 35, "gpu": "Intel UHD Graphics 770"},
+    "i513400t": {"name": "Intel Core i5-13400T", "cores": 10, "threads": 16, "tdp_w": 35, "gpu": "Intel UHD Graphics 730"},
+    "i513500t": {"name": "Intel Core i5-13500T", "cores": 14, "threads": 20, "tdp_w": 35, "gpu": "Intel UHD Graphics 770"},
+    "i713700t": {"name": "Intel Core i7-13700T", "cores": 16, "threads": 24, "tdp_w": 35, "gpu": "Intel UHD Graphics 770"},
+    "i514500t": {"name": "Intel Core i5-14500T", "cores": 14, "threads": 20, "tdp_w": 35, "gpu": "Intel UHD Graphics 770"},
+    "i310300t": {"name": "Intel Core i3-10300T", "cores": 4, "threads": 8, "tdp_w": 35, "gpu": "Intel UHD Graphics 630"},
+    "i310105t": {"name": "Intel Core i3-10105T", "cores": 4, "threads": 8, "tdp_w": 35, "gpu": "Intel UHD Graphics 630"},
+    "i99900t": {"name": "Intel Core i9-9900T", "cores": 8, "threads": 16, "tdp_w": 35, "gpu": "Intel UHD Graphics 630"},
+    "i910900t": {"name": "Intel Core i9-10900T", "cores": 10, "threads": 20, "tdp_w": 35, "gpu": "Intel UHD Graphics 630"},
+    "g6400t": {"name": "Intel Pentium Gold G6400T", "cores": 2, "threads": 4, "tdp_w": 35, "gpu": "Intel UHD Graphics 610"},
+    "g7400t": {"name": "Intel Pentium Gold G7400T", "cores": 2, "threads": 4, "tdp_w": 35, "gpu": "Intel UHD Graphics 710"},
+    "i313100t": {"name": "Intel Core i3-13100T", "cores": 4, "threads": 8, "tdp_w": 35, "gpu": "Intel UHD Graphics 730"},
+    "i513600t": {"name": "Intel Core i5-13600T", "cores": 14, "threads": 20, "tdp_w": 35, "gpu": "Intel UHD Graphics 770"},
+    "i911900t": {"name": "Intel Core i9-11900T", "cores": 8, "threads": 16, "tdp_w": 35, "gpu": "Intel UHD Graphics 750"},
 }
+
+# PassMark CPU Mark ratings as (single thread, multithread), copied once from
+# cpubenchmark.net's CPU lists and per-CPU pages. They are averages of user
+# submissions, not a test of the listed machine. Refresh by hand (never during a
+# scan); a CPU without an entry falls back to CPU_PERFORMANCE_POINTS.
+BENCHMARK_SOURCE = "PassMark CPU Mark"
+BENCHMARK_VERSION = "cpubenchmark.net, retrieved 2026-11-09"
+CPU_BENCHMARKS: dict[str, tuple[int, int]] = {
+    "g3900t": (1529, 1948), "g3930t": (1655, 2023), "g4400t": (1743, 2318), "g4500t": (1856, 2411),
+    "g4560t": (1726, 2976), "g4600t": (1775, 3062), "g4900t": (1733, 2236), "g4930t": (1773, 2287),
+    "g5400t": (1793, 3161), "g5420t": (1899, 3330), "g5500t": (1890, 3293), "g5600t": (2000, 3496),
+    "i56400t": (1606, 4258), "i56500t": (1773, 4763), "i56600t": (2055, 5588), "i57500": (2244, 6045),
+    "i57500t": (1918, 5241), "i58400t": (1899, 7394), "i58500": (2428, 9501), "i58500t": (1996, 7724),
+    "i58600t": (2261, 9149), "i76700t": (2007, 6975), "i78700": (2624, 12731), "i77700t": (2131, 7547),
+    "i78700t": (2299, 10212), "i59500": (2564, 9841), "i59500t": (2105, 8008), "i79700": (2742, 13167),
+    "i79700t": (2418, 10581), "i510400": (2555, 11956), "i510500": (2777, 12872), "i510500t": (2283, 10238),
+    "i710700": (2879, 15963), "i710700t": (2568, 12801), "i511500": (3131, 17055), "i511500t": (2536, 12782),
+    "i711700": (3253, 20564), "i711700t": (2850, 15199), "i512500": (3645, 19680), "i512500t": (3440, 16310),
+    "i712700": (3839, 29737), "i712700t": (3558, 21129), "i36100t": (1854, 3635), "i37100t": (1911, 3728),
+    "i38100t": (1855, 5249), "i39100t": (2116, 5637), "i310100t": (2255, 7347), "i56500": (2087, 5597),
+    "i57400t": (1733, 4673), "i57600": (2449, 6583), "i57600t": (2138, 5844), "i58400": (2364, 9236),
+    "i58600": (2554, 9990), "i59400": (2412, 9347), "i59400t": (2058, 8092), "i59600t": (2416, 9568),
+    "i510400t": (2124, 9769), "i510600t": (2460, 11482), "i76700": (2274, 8032), "i77700": (2441, 8638),
+    "ryzen3pro3200g": (2112, 6563), "ryzen5pro3400g": (2281, 9004), "ryzen3pro2200g": (2035, 6607), "ryzen5pro2400g": (2138, 8546),
+    "ryzen3pro3200ge": (2117, 6732), "ryzen5pro3400ge": (2085, 7770), "a10pro9700e": (1454, 3059), "a12pro9800e": (1469, 3049),
+    "n100": (1879, 5304), "ryzen3pro2200ge": (1991, 6099), "ryzen5pro2400ge": (2121, 7801), "ryzen5pro4650ge": (2609, 15301),
+    "ryzen7pro4750ge": (2677, 18436), "ryzen5pro5650ge": (3187, 17964), "ryzen7pro5750ge": (3252, 20998), "ryzen56600h": (3133, 17959),
+    "ryzen76800h": (3177, 22651), "i511400t": (2475, 13104), "i312100t": (3221, 12392), "i512400t": (3331, 15575),
+    "i512600t": (3549, 17444), "i513500t": (3578, 22411), "i513400t": (3474, 20095), "i713700t": (3801, 27130),
+    "i514500t": (3735, 22840), "i310300t": (2291, 7876), "i511600t": (2762, 14649), "i310105t": (2355, 7803),
+    "g6400t": (2102, 3565), "i99900t": (2456, 13029), "i910900t": (2519, 14714),
+    "g7400t": (2348, 5274), "i313100t": (3359, 12738), "i513600t": (3775, 27789), "i911900t": (3208, 18245),
+}
+
+# Microarchitecture and launch year. Intel Core parts follow their generation;
+# the rest are listed explicitly. Approximate launch years, for context only.
+CORE_GENERATION_ARCHITECTURES: dict[int, tuple[str, int]] = {
+    6: ("Skylake", 2015), 7: ("Kaby Lake", 2017), 8: ("Coffee Lake", 2018),
+    9: ("Coffee Lake Refresh", 2019), 10: ("Comet Lake", 2020), 11: ("Rocket Lake", 2021),
+    12: ("Alder Lake", 2022), 13: ("Raptor Lake", 2023), 14: ("Raptor Lake Refresh", 2024),
+}
+CPU_ARCHITECTURES: dict[str, tuple[str, int]] = {
+    "g3900t": ("Skylake", 2015), "g4400t": ("Skylake", 2015), "g4500t": ("Skylake", 2015),
+    "g3930t": ("Kaby Lake", 2017), "g4560t": ("Kaby Lake", 2017), "g4600t": ("Kaby Lake", 2017),
+    "g4900t": ("Coffee Lake", 2018), "g5400t": ("Coffee Lake", 2018), "g5500t": ("Coffee Lake", 2018),
+    "g5600t": ("Coffee Lake", 2018), "g4930t": ("Coffee Lake", 2019), "g5420t": ("Coffee Lake", 2019),
+    "g6400t": ("Comet Lake", 2020), "g7400t": ("Alder Lake", 2022),
+    # Desktop 8th-gen non-T parts launched in late 2017, the T parts in 2018.
+    "i58400": ("Coffee Lake", 2017), "i58600": ("Coffee Lake", 2017), "i78700": ("Coffee Lake", 2017),
+    "n100": ("Alder Lake-N", 2023),
+    "a10pro9700e": ("Bristol Ridge (Excavator)", 2016), "a12pro9800e": ("Bristol Ridge (Excavator)", 2016),
+    "ryzen3pro2200g": ("Raven Ridge (Zen)", 2018), "ryzen5pro2400g": ("Raven Ridge (Zen)", 2018),
+    "ryzen3pro2200ge": ("Raven Ridge (Zen)", 2018), "ryzen5pro2400ge": ("Raven Ridge (Zen)", 2018),
+    "ryzen3pro3200g": ("Picasso (Zen+)", 2019), "ryzen5pro3400g": ("Picasso (Zen+)", 2019),
+    "ryzen3pro3200ge": ("Picasso (Zen+)", 2019), "ryzen5pro3400ge": ("Picasso (Zen+)", 2019),
+    "ryzen5pro4650ge": ("Renoir (Zen 2)", 2020), "ryzen7pro4750ge": ("Renoir (Zen 2)", 2020),
+    "ryzen5pro5650ge": ("Cezanne (Zen 3)", 2021), "ryzen7pro5750ge": ("Cezanne (Zen 3)", 2021),
+    "ryzen56600h": ("Rembrandt (Zen 3+)", 2022), "ryzen76800h": ("Rembrandt (Zen 3+)", 2022),
+}
+
+
+def _merge_reference_data() -> None:
+    """Attach benchmark and architecture fields to CPU_CATALOG entries."""
+    for key, specification in CPU_CATALOG.items():
+        if key in CPU_BENCHMARKS:
+            specification["bench_st"], specification["bench_mt"] = CPU_BENCHMARKS[key]
+        match = re.fullmatch(r"i[3579](\d{4,5})[a-z]*", key)
+        generation = int(match.group(1)[:-3]) if match else None
+        architecture = CPU_ARCHITECTURES.get(key) or CORE_GENERATION_ARCHITECTURES.get(generation)
+        if architecture:
+            specification["architecture"], specification["launch_year"] = architecture
+
+
+_merge_reference_data()
 
 # Parse longer / exact models first, so e.g. i5-7500T cannot be reduced to i5-7500.
 INTEL_CPU_RE = re.compile(
@@ -209,19 +314,21 @@ VPRO_CPU_KEYS = {
     "i510500", "i510500t", "i511500", "i511500t", "i512500", "i512500t",
     "i76700", "i76700t", "i77700", "i77700t", "i78700", "i78700t",
     "i79700", "i79700t", "i710700", "i710700t", "i711700", "i711700t",
-    "i712700", "i712700t",
+    "i712700", "i712700t", "i512600t", "i513500t", "i514500t", "i713700t",
+    "i513600t", "i911900t",
 }
 NON_VPRO_CPU_KEYS = {
     "g3900t", "g3930t", "g4400t", "g4500t", "g4560t", "g4600t", "g4900t", "g4930t",
     "g5400t", "g5420t", "g5500t", "g5600t", "n100",
     "i36100t", "i37100t", "i38100t", "i39100t", "i310100t",
     "i56400t", "i57400t", "i58400", "i58400t", "i59400", "i59400t",
-    "i510400", "i510400t",
+    "i510400", "i510400t", "i511400t", "i512400t", "i513400t",
+    "i312100t", "i310300t", "i310105t", "g6400t", "g7400t", "i313100t",
 }
 
 
 def _platform(
-    pattern: str, name: str, generation: int | None, vpro: str, max_ram_gb: int,
+    pattern: str, name: str, generation: int | None, vpro: str, max_ram_gb: int | None,
     pcie_slot: bool | None, max_tdp_w: int | None, typical_cpu: str,
     cpu_generations: tuple[int, ...] | None = None,
 ) -> dict[str, Any]:
@@ -241,7 +348,37 @@ def _platform(
 # max_ram_gb is the official maximum; max_tdp_w is the highest CPU class the
 # chassis ships with (35 = T-series only). None means "not confirmed here".
 # cpu_generations lists the Intel Core generations the model was offered with.
+_GEN = r"\s*(?:Gen\.?|G)\s*"
+
+
+def _dell_micro(number: int) -> str:
+    """Match "OptiPlex 7010 Micro" and Dell's newer "OptiPlex Micro 7020" order."""
+    return rf"\bOptiPlex\s+(?:{number}\s+Micro|Micro\s+{number})\b"
 PLATFORM_PROFILES: list[dict[str, Any]] = [
+    # 11th-13th gen. Lenovo values from the PSREF spec sheets of each model
+    # (psref.lenovo.com, ThinkCentre_<model>_Spec.pdf, read 2026-11-09). HP and
+    # Dell values from the HP 800 G8 Desktop Mini datasheet and the Dell OptiPlex
+    # 7090 Micro Setup and Specifications; HP QuickSpecs could not be read, so
+    # unconfirmed HP fields stay None ("to verify").
+    _platform(rf"\bM70q{_GEN}4\b", "Lenovo ThinkCentre M70q Gen 4 Tiny", 13, "yes", 64, False, 35, "i513400t"),
+    _platform(rf"\bM70q{_GEN}3\b", "Lenovo ThinkCentre M70q Gen 3 Tiny", 12, "yes", 64, False, 35, "i512400t"),
+    _platform(rf"\bM70q{_GEN}2\b", "Lenovo ThinkCentre M70q Gen 2 Tiny", 11, "verify", 64, False, 35, "i511400t", (10, 11)),
+    _platform(rf"\bM80q{_GEN}3\b", "Lenovo ThinkCentre M80q Gen 3 Tiny", 12, "yes", 64, False, 35, "i512500t"),
+    _platform(rf"\bM90q{_GEN}3\b", "Lenovo ThinkCentre M90q Gen 3 Tiny", 12, "yes", 64, True, 65, "i512500t"),
+    _platform(rf"\bM90q{_GEN}2\b", "Lenovo ThinkCentre M90q Gen 2 Tiny", 11, "yes", 64, None, 65, "i511500t", (10, 11)),
+    _platform(r"\bEliteDesk\s+800\s+G8\b", "HP EliteDesk 800 G8 Mini", 11, "yes", 64, None, None, "i511500t"),
+    _platform(r"\b(?:EliteDesk|Elite\s+Mini)\s+800\s+G9\b", "HP Elite Mini 800 G9", 12, "verify", 64, None, None, "i512500t"),
+    _platform(r"\bOptiPlex\s+7090\b", "Dell OptiPlex 7090 Micro", 11, "yes", 64, None, 65, "i511500t", (10, 11)),
+    # 12th-14th gen Dell Micros. Their numbers clash with older Dell products
+    # (OptiPlex 7010 of 2012, OptiPlex 3000 Thin Client), so "Micro" must be
+    # named next to the model. Dell's spec sheets were not read for this change,
+    # so max RAM, vPro, PCIe and TDP stay unknown / "to verify"; only the name,
+    # CPU generation and typical CPU are used for scoring.
+    _platform(_dell_micro(7020), "Dell OptiPlex Micro 7020", 14, "verify", None, None, None, "i514500t", (12, 13, 14)),
+    _platform(_dell_micro(7010), "Dell OptiPlex 7010 Micro", 13, "verify", None, None, None, "i513500t", (12, 13)),
+    _platform(_dell_micro(7000), "Dell OptiPlex 7000 Micro", 12, "verify", None, None, None, "i512500t"),
+    _platform(_dell_micro(5000), "Dell OptiPlex 5000 Micro", 12, "verify", None, None, None, "i512500t"),
+    _platform(_dell_micro(3000), "Dell OptiPlex 3000 Micro", 12, "verify", None, None, None, "i512500t"),
     _platform(r"\bM920x\b", "Lenovo ThinkCentre M920x Tiny", 8, "yes", 32, True, 65, "i58500t", (8, 9)),
     _platform(r"\bM920q?\b", "Lenovo ThinkCentre M920q Tiny", 8, "yes", 32, True, 65, "i58500t", (8, 9)),
     _platform(r"\bM720q?\b", "Lenovo ThinkCentre M720q Tiny", 8, "no", 32, True, 65, "i58500t", (8, 9)),
@@ -294,6 +431,9 @@ TYPICAL_CPU_BY_GENERATION: dict[int, dict[str, str]] = {
     8: {"entry": "g5400t", "i3": "i38100t", "i5": "i58500t", "i7": "i78700t"},
     9: {"entry": "g5400t", "i3": "i39100t", "i5": "i59500t", "i7": "i79700t"},
     10: {"entry": "g5600t", "i3": "i310100t", "i5": "i510500t", "i7": "i710700t"},
+    11: {"entry": "g6400t", "i3": "i310105t", "i5": "i511500t", "i7": "i711700t"},
+    12: {"entry": "g7400t", "i3": "i312100t", "i5": "i512500t", "i7": "i712700t"},
+    13: {"entry": "g7400t", "i3": "i313100t", "i5": "i513500t", "i7": "i713700t"},
 }
 CPU_TIER_HINT_RE = re.compile(
     r"\b(?:core\s*)?i\s*-?\s*([3579])\b|\b(celeron|pentium)\b|\b(?:amd\s+)?pro\s+(a1[02])\b",
@@ -342,6 +482,84 @@ def compatible_platforms(cpu_key: str) -> list[str]:
     return names
 
 
+def cpu_performance(
+    cpu_key: str | None, ceiling_key: str | None = None
+) -> tuple[float | None, str | None]:
+    """Return (0-1 performance fraction, source) for a catalog CPU.
+
+    Source is "benchmark" when PassMark data exists for the CPU and the ceiling,
+    "tier" for the curated fallback, and (None, None) for an unknown CPU.
+    """
+    cpu = CPU_CATALOG.get(cpu_key or "")
+    if not cpu:
+        return None, None
+    ceiling = CPU_CATALOG.get(ceiling_key or BENCHMARK_CEILING_CPU) or CPU_CATALOG[BENCHMARK_CEILING_CPU]
+    if cpu.get("bench_mt") and cpu.get("bench_st") and ceiling.get("bench_mt") and ceiling.get("bench_st"):
+        multi = min(cpu["bench_mt"] / ceiling["bench_mt"], 1.0)
+        single = min(cpu["bench_st"] / ceiling["bench_st"], 1.0)
+        return BENCHMARK_MT_SHARE * multi + (1 - BENCHMARK_MT_SHARE) * single, "benchmark"
+    if cpu_key in CPU_PERFORMANCE_POINTS:
+        return CPU_PERFORMANCE_POINTS[cpu_key] / 50, "tier"
+    return None, None
+
+
+def short_cpu_name(name: str) -> str:
+    """"Intel Core i5-12500T" -> "i5-12500T", "Intel Processor N100" -> "N100"."""
+    return re.sub(r"^(?:Intel\s+(?:Core\s+|Processor\s+|Pentium\s+Gold\s+|Pentium\s+|Celeron\s+)?|AMD\s+)", "", name)
+
+
+def _resolve_cpu_key(value: Any) -> str | None:
+    """Accept a catalog key ("i512500t") or a CPU name ("i5-12500T", "Intel N100")."""
+    text = str(value or "").strip()
+    if text.lower() in CPU_CATALOG:
+        return text.lower()
+    name, _cpu = _canonical_cpu(text)
+    return _cpu_key_for_name(name)
+
+
+def reference_cpus(keys: Any = None) -> list[dict[str, Any]]:
+    """Return reference CPUs with their benchmark data; unknown entries are skipped."""
+    if not isinstance(keys, (list, tuple)):
+        keys = DEFAULT_REFERENCE_CPUS
+    references = []
+    for value in keys:
+        key = _resolve_cpu_key(value)
+        if not key or any(ref["key"] == key for ref in references):
+            if not key:
+                logging.warning("Unknown reference CPU ignored: %r", value)
+            continue
+        cpu = CPU_CATALOG[key]
+        references.append({
+            "key": key, "name": short_cpu_name(cpu["name"]),
+            "st": cpu.get("bench_st"), "mt": cpu.get("bench_mt"),
+        })
+    return references
+
+
+def benchmark_for_name(cpu_name: str | None) -> dict[str, Any] | None:
+    """Return {"st", "mt", "source"} for a canonical CPU name, or None."""
+    cpu = CPU_CATALOG.get(_cpu_key_for_name(cpu_name) or "")
+    if not cpu or not (cpu.get("bench_st") or cpu.get("bench_mt")):
+        return None
+    return {"st": cpu.get("bench_st"), "mt": cpu.get("bench_mt"),
+            "source": f"{BENCHMARK_SOURCE} ({BENCHMARK_VERSION})"}
+
+
+def compare_to_references(
+    benchmark: dict[str, Any] | None, references: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Multithread/single-thread ratios against each reference; None when incomplete."""
+    rows = []
+    for ref in references:
+        def ratio(metric: str) -> float | None:
+            mine = (benchmark or {}).get(metric)
+            return round(mine / ref[metric], 2) if mine and ref.get(metric) else None
+        mt_ratio, st_ratio = ratio("mt"), ratio("st")
+        rows.append({"name": ref["name"], "mt_ratio": mt_ratio, "st_ratio": st_ratio,
+                     "complete": mt_ratio is not None and st_ratio is not None})
+    return rows
+
+
 def _find_platform_profile(text: str) -> dict[str, Any] | None:
     for profile in PLATFORM_PROFILES:
         if profile["pattern"].search(text):
@@ -367,41 +585,55 @@ def _vpro_status(platform: dict[str, Any] | None, cpu_key: str | None) -> tuple[
     return "possible: vPro chipset, the CPU must be a vPro model", 4
 
 
-def _canonical_cpu(text: str) -> tuple[str | None, dict[str, Any] | None]:
+def _cpu_candidates(text: str):
+    """Yield (name, spec) for every catalog CPU mentioned, most specific patterns first."""
     n100 = N100_RE.search(text)
     if n100:
-        return "Intel Processor N100", CPU_CATALOG["n100"]
+        yield "Intel Processor N100", CPU_CATALOG["n100"]
 
     for match in INTEL_CPU_RE.finditer(text):
         key = ("i" + match.group(1) + match.group(2) + (match.group(3) or "")).lower()
         # A suffixless model is not the same SKU as its low-power T version.
         if key in CPU_CATALOG:
-            return CPU_CATALOG[key]["name"], CPU_CATALOG[key]
+            yield CPU_CATALOG[key]["name"], CPU_CATALOG[key]
 
     for match in AMD_CPU_RE.finditer(text):
         family = "ryzen" + match.group(1) + ("pro" if match.group(2) else "") + match.group(3)
         key = re.sub(r"[^a-z0-9]", "", family.lower())
         if key in CPU_CATALOG:
-            return CPU_CATALOG[key]["name"], CPU_CATALOG[key]
+            yield CPU_CATALOG[key]["name"], CPU_CATALOG[key]
 
     for match in ENTRY_LEVEL_CPU_RE.finditer(text):
         key = re.sub(r"[^a-z0-9]", "", match.group(1).lower())
         if key in CPU_CATALOG:
-            return CPU_CATALOG[key]["name"], CPU_CATALOG[key]
+            yield CPU_CATALOG[key]["name"], CPU_CATALOG[key]
 
     for match in AMD_A_SERIES_RE.finditer(text):
         key = f"a{match.group(1)}pro{match.group(2).lower()}"
         if key in CPU_CATALOG:
-            return CPU_CATALOG[key]["name"], CPU_CATALOG[key]
+            yield CPU_CATALOG[key]["name"], CPU_CATALOG[key]
 
     for match in BARE_T_CPU_RE.finditer(text):
         number = match.group(1)
         keys = [f"i{tier}{number}t" for tier in "3579" if f"i{tier}{number}t" in CPU_CATALOG]
         # Accept the bare number only when it maps to exactly one Core model.
         if len(keys) == 1:
-            return CPU_CATALOG[keys[0]]["name"], CPU_CATALOG[keys[0]]
+            yield CPU_CATALOG[keys[0]]["name"], CPU_CATALOG[keys[0]]
 
-    return None, None
+
+
+def _canonical_cpu(text: str) -> tuple[str | None, dict[str, Any] | None]:
+    """Return the first (most specific) catalog CPU mentioned in the text."""
+    return next(_cpu_candidates(text), (None, None))
+
+
+def cpu_mentions(text: str) -> list[str]:
+    """Distinct catalog CPU names mentioned, in match-priority order."""
+    names: list[str] = []
+    for name, _cpu in _cpu_candidates(text):
+        if name not in names:
+            names.append(name)
+    return names
 
 
 class _ListingHTMLParser(HTMLParser):
@@ -549,22 +781,27 @@ def fetch_listing_description(
 def _find_ram_gb(text: str) -> int | None:
     # Prefer number-first phrasing: "16GB RAM". Do this before "RAM 512GB"
     # because in "16GB RAM 512GB NVMe" the latter sequence would misread SSD size as RAM.
-    explicit_after = re.search(r"\b(\d{1,3})\s*(?:gb|go)\s*(?:ddr[345]\s*)?(?:ram|memory|di ram|de ram)\b", text, re.I)
-    if explicit_after:
-        return int(explicit_after.group(1))
-    explicit = re.search(r"\b(?:ram|memory|memoria|m[eé]moire)\s*[:=]\s*(\d{1,3})\s*(?:gb|go)\b", text, re.I)
-    if explicit:
-        return int(explicit.group(1))
-    explicit = re.search(r"\b(?:ram|memory|memoria|m[eé]moire)\s+(\d{1,3})\s*(?:gb|go)\b", text, re.I)
-    if explicit:
-        return int(explicit.group(1))
+    # Stay on one line ([ \t], not \s) and accept only plausible sizes: a title
+    # ending in "SSD 500GO" followed by a description starting "RAM : 8 Go"
+    # must not read as 500 GB of RAM.
+    explicit_patterns = (
+        r"\b(\d{1,3})[ \t]*(?:gb|go)[ \t]*(?:ddr[345][ \t]*)?(?:ram|memory|di ram|de ram)\b",
+        r"\b(?:ram|memory|memoria|m[eé]moire)[ \t]*[:=][ \t]*(\d{1,3})[ \t]*(?:gb|go)\b",
+        r"\b(?:ram|memory|memoria|m[eé]moire)[ \t]+(\d{1,3})[ \t]*(?:gb|go)\b",
+    )
+    for pattern in explicit_patterns:
+        for match in re.finditer(pattern, text, re.I):
+            if int(match.group(1)) in PLAUSIBLE_RAM_SIZES_GB:
+                return int(match.group(1))
 
     # Common resale title pattern: "i5-8600T | 16GB | 256GB SSD". Treat as
     # RAM the first capacity that is not attached to an explicit storage label.
+    # "8Go SSD 256" is RAM followed by the drive, so tiny "GB SSD" readings
+    # do not count as storage (same threshold as _find_storage).
     storage_spans = [m.span() for m in re.finditer(
-        r"\b\d+(?:[.,]\d+)?\s*(?:gb|tb|go|to)\s*(?:nvme|ssd|hdd|sshd|sata|m\.2|hard\s?disk|hard\s?drive|emmc)",
+        r"\b(\d+(?:[.,]\d+)?)\s*(gb|tb|go|to)\s*(?:nvme|ssd|hdd|sshd|sata|m\.2|hard\s?disk|hard\s?drive|emmc)",
         text, re.I
-    )]
+    ) if m.group(2).lower() in ("tb", "to") or float(m.group(1).replace(",", ".")) >= MIN_DRIVE_GB]
     capacity_matches = list(re.finditer(r"\b(\d{1,4})\s*(?:gb|go)\b", text, re.I))
     for match in capacity_matches:
         # Mini-PC RAM sizes; larger numbers in "256go/8go" style titles are storage.
@@ -579,6 +816,50 @@ def _find_ram_gb(text: str) -> int | None:
     return None
 
 
+# Smaller "GB SSD" readings come from RAM written next to the drive type.
+MIN_DRIVE_GB = 16
+
+RAM_LAYOUT_RE = re.compile(r"\b([1-4])\s*[x×*]\s*(\d{1,2})\s*(?:gb|go)\b", re.I)
+RAM_PAIR_RE = re.compile(r"\b(\d{1,2})\s*(?:gb|go)?\s*\+\s*(\d{1,2})\s*(?:gb|go)\b", re.I)
+SINGLE_MODULE_RE = re.compile(
+    r"\b(?:single\s+(?:module|stick|dimm|so-?dimm)|(?:un\s+)?(?:unico|singolo)\s+(?:modulo|banco)"
+    r"|(?:modulo|banco)\s+(?:unico|singolo)|une?\s+seule?\s+barrette)\b",
+    re.I,
+)
+
+
+def _find_ram_layout(text: str, ram_gb: int | None) -> list[int] | None:
+    """Return installed module sizes, e.g. [8, 8], only when the listing states them.
+
+    The layout must add up to the installed RAM; anything else stays unknown,
+    so 16 GB is never assumed to be 1×16 or 2×8.
+    """
+    candidates: list[list[int]] = []
+    for match in RAM_LAYOUT_RE.finditer(text):
+        count, size = int(match.group(1)), int(match.group(2))
+        if size in RAM_MODULE_SIZES_GB:
+            candidates.append([size] * count)
+    for match in RAM_PAIR_RE.finditer(text):
+        sizes = [int(match.group(1)), int(match.group(2))]
+        if all(size in RAM_MODULE_SIZES_GB for size in sizes):
+            candidates.append(sorted(sizes, reverse=True))
+    if ram_gb and SINGLE_MODULE_RE.search(text):
+        candidates.append([ram_gb])
+    for modules in candidates:
+        if ram_gb is None or sum(modules) == ram_gb:
+            return modules
+    return None
+
+
+def ram_layout_label(modules: list[int] | None) -> str:
+    """[8, 8] -> "2×8 GB", [16, 8] -> "16+8 GB", None -> "layout unknown"."""
+    if not modules:
+        return "layout unknown"
+    if len(set(modules)) == 1:
+        return f"{len(modules)}×{modules[0]} GB"
+    return "+".join(str(size) for size in modules) + " GB"
+
+
 def _storage_unit(unit: str) -> str:
     """Normalize GB/TB and the French Go/To spelling."""
     return {"GO": "GB", "TO": "TB"}.get(unit.upper(), unit.upper())
@@ -591,17 +872,33 @@ def _find_storage(text: str) -> list[str]:
     for match in pattern_a.finditer(text):
         capacity = match.group(1).replace(",", ".")
         unit = _storage_unit(match.group(2))
+        # "8Go SSD 256": the 8 GB is the RAM, not a drive.
+        if unit == "GB" and float(capacity) < MIN_DRIVE_GB:
+            continue
         kind = re.sub(r"\s+", " ", match.group(3)).upper()
         found.append((match.start(), f"{capacity} {unit} {kind}"))
-    # Reverse order: NVMe 512GB / SSD da 512 GB.
-    pattern_b = re.compile(r"\b(nvme|ssd|hdd|sshd|sata\s+ssd)\s*(?:da|of|de)?\s*(\d+(?:[.,]\d+)?)\s*(gb|tb|go|to)\b", re.I)
+    # Reverse order: NVMe 512GB / SSD da 512 GB / SSD M.2 256GB.
+    pattern_b = re.compile(
+        r"\b(nvme|ssd|hdd|sshd|sata\s+ssd)(\s+m\.2)?\s*(?:da|of|de)?\s*(\d+(?:[.,]\d+)?)\s*(gb|tb|go|to)\b", re.I
+    )
     for match in pattern_b.finditer(text):
-        capacity = match.group(2).replace(",", ".")
-        found.append((match.start(), f"{capacity} {_storage_unit(match.group(3))} {match.group(1).upper()}"))
-    # Remove duplicate readings of the same span/value.
+        capacity = match.group(3).replace(",", ".")
+        kind = match.group(1).upper() + (" M.2" if match.group(2) else "")
+        found.append((match.start(), f"{capacity} {_storage_unit(match.group(4))} {kind}"))
+    # Unit omitted after the drive type: "SSD 256". Only common drive sizes.
+    pattern_c = re.compile(
+        r"\b(nvme|ssd)\s+(120|128|240|250|256|480|500|512)\b(?!\s*(?:gb|go|tb|to|mb|mhz|[.,]\d))", re.I
+    )
+    for match in pattern_c.finditer(text):
+        found.append((match.start(), f"{match.group(2)} GB {match.group(1).upper()}"))
+    # Remove duplicate readings of the same drive: same capacity and drive type,
+    # so "512GB NVMe" and "NVMe M.2 512GB" in one listing count once.
     result: list[str] = []
+    keys: set[tuple[str, ...]] = set()
     for _, value in sorted(found):
-        if value not in result:
+        key = tuple(value.split()[:3])
+        if key not in keys:
+            keys.add(key)
             result.append(value)
     return result[:4]
 
@@ -665,8 +962,8 @@ def _cpu_upgrade_estimate(
         }
 
     current_key = _cpu_key_for_name(current_cpu_name)
-    current_points = CPU_PERFORMANCE_POINTS.get(current_key or "", 0)
-    candidate_points = CPU_PERFORMANCE_POINTS.get(profile["candidate_key"], 0)
+    current_points = cpu_performance(current_key)[0] or 0.0
+    candidate_points = cpu_performance(profile["candidate_key"])[0] or 0.0
     needed = not current_key or current_points < candidate_points
 
     costs = configured_costs if isinstance(configured_costs, dict) else {}
@@ -695,9 +992,14 @@ def _cpu_upgrade_estimate(
     }
 
 
+# Bump whenever parsing or scoring changes what an alert says about a listing.
+# Stored with each listing (score_version), so the dashboard can tell scores of
+# the current rules from older ones; rescore.py recalculates the older ones.
+SCORING_VERSION = "1"
+
 # Bump whenever target/exclusion rules change, so listings filtered by an older
 # rule set are evaluated again instead of staying hidden forever.
-FILTER_RULES_VERSION = "2"
+FILTER_RULES_VERSION = "3"
 
 # Applied to the listing title only: descriptions of complete systems often
 # mention fans, power adapters or brackets ("alimentatore incluso").
@@ -714,7 +1016,8 @@ PARTS_OR_LOT_TITLE_RE = re.compile(
 # "M920q i5-8500T 16GB con antenna WiFi" is still treated as a system.
 COMPONENT_TITLE_RE = re.compile(
     r"\b(?:staffa|staffe|antenna|antenne|ventola|ventole|dissipatore|heatsink|"
-    r"scheda\s+madre|motherboard|mainboard|scheda\s+wi-?fi|halterung|l[uü]fter|"
+    r"scheda\s+madre|motherboard|mainboard|carte\s+m[eè]re|placa\s+(?:base|madre)|"
+    r"scheda\s+wi-?fi|halterung|l[uü]fter|"
     r"k[uü]hler|ventilateur|supporto\s+vesa|vesa\s+mount|bracket|caddy|"
     r"solo\s+case|case\s+vuoto)\b"
     r"|^\s*(?:alimentatore|caricatore|caricabatterie|adattatore|power\s+supply|"
@@ -753,6 +1056,15 @@ def _is_target_system(text: str) -> tuple[bool, str | None]:
         (r"\b(?:Lenovo\s+)?ThinkCentre\s+M\d{3,4}\s+Tiny\b", "Lenovo ThinkCentre Tiny"),
         (r"\b(?:Lenovo\s+)?ThinkCentre\s+M700\b(?=[\s\S]{0,180}\b(?:USFF|Ultra\s+Small\s+Form\s+Factor|Tiny)\b)", "Lenovo ThinkCentre Tiny (M700 / USFF wording)"),
         (r"\b(?:Dell\s+)?OptiPlex\s+\d{4}\s+Micro(?:\s+Form\s+Factor)?\b", "Dell OptiPlex Micro"),
+        # Dell's own name for the 2024 model is "OptiPlex Micro 7020".
+        (r"\b(?:Dell\s+)?OptiPlex\s+Micro\s+\d{4}\b", "Dell OptiPlex Micro"),
+        # HP model numbers without the family word: in HP's business line,
+        # "400/600 Gx Mini" can only be a ProDesk and "800 Gx Mini" an EliteDesk.
+        (r"\bHP\s+[468]00\s+G\d\s+(?:Mini|DM|Desktop\s+Mini)\b", "HP ProDesk/EliteDesk Mini"),
+        # "Mini PC HP EliteDesk 705 G5": the form factor comes before the model.
+        # Requires the brand, family, model number and generation, so a generic
+        # "Mini PC HP ProDesk 600" without a generation is still not accepted.
+        (r"\bMini[\s-]?PC\s+(?:HP\s+)?(?:EliteDesk|ProDesk)\s+\d{3}\s+G\d\b", "HP EliteDesk/ProDesk Mini (Mini PC wording)"),
     ]
     for pattern, family in checks:
         if re.search(pattern, text, re.I):
@@ -799,8 +1111,14 @@ def _upgrade_estimates(
     price: str | None,
     ram_8gb_upgrade_eur: float,
     ram_32gb_kit_eur: float,
+    ram_modules: list[int] | None = None,
+    ram_16gb_module_eur: float = DEFAULT_RAM_16GB_MODULE_EUR,
 ) -> dict[str, Any]:
-    """Estimate outlay for 16/32 GB without assuming unknown RAM topology."""
+    """Estimate outlay for 16/32 GB without assuming unknown RAM topology.
+
+    Supported Mini/Tiny/Micro chassis have two SO-DIMM slots. A stated layout
+    refines the estimate; an unknown layout keeps the conservative budget.
+    """
     listing_price = _parse_price_eur(price)
     upgrade_16: float | None
     upgrade_32: float | None
@@ -813,10 +1131,17 @@ def _upgrade_estimates(
     else:
         if ram_gb >= 16:
             upgrade_16 = 0.0
+        elif ram_gb == 8 and ram_modules == [4, 4]:
+            # Both slots are used: reaching 16 GB means replacing the modules.
+            upgrade_16 = float(ram_8gb_upgrade_eur)
+            note = "16 GB estimate is a rough budget: both slots used (2×4 GB), modules must be replaced"
         elif ram_gb == 8:
             # User-supplied assumption: add one compatible 8 GB module.
             upgrade_16 = float(ram_8gb_upgrade_eur)
-            note = "16 GB estimate: assumes adding 1×8 GB compatible module"
+            if ram_modules == [8]:
+                note = "16 GB estimate: 1×8 GB installed, add one compatible 8 GB module"
+            else:
+                note = "16 GB estimate: assumes adding 1×8 GB compatible module"
         elif ram_gb < 8:
             # A 4 GB base may need a replacement module or a kit; keep the same
             # planning allowance, but mark it as a rough estimate, not a fit claim.
@@ -825,7 +1150,17 @@ def _upgrade_estimates(
         else:
             upgrade_16 = float(ram_8gb_upgrade_eur)
             note = "16 GB estimate is a rough budget: check module layout and compatibility"
-        upgrade_32 = 0.0 if ram_gb >= 32 else float(ram_32gb_kit_eur)
+        if ram_gb >= 32:
+            upgrade_32 = 0.0
+        elif ram_modules == [16]:
+            # One 16 GB module in a two-slot chassis: add a matching 16 GB module.
+            upgrade_32 = float(ram_16gb_module_eur)
+            if ram_gb >= 16:
+                note = "32 GB estimate: 1×16 GB installed, add one compatible 16 GB module"
+        else:
+            upgrade_32 = float(ram_32gb_kit_eur)
+            if ram_gb >= 16 and ram_modules and len(ram_modules) >= 2:
+                note = f"32 GB estimate: {ram_layout_label(ram_modules)} installed, both modules replaced by a 2×16 GB kit"
 
     return {
         "listing_price_eur": listing_price,
@@ -844,13 +1179,19 @@ def analyze_hardware(
     ram_8gb_upgrade_eur: float = DEFAULT_RAM_8GB_UPGRADE_EUR,
     ram_32gb_kit_eur: float = DEFAULT_RAM_32GB_KIT_EUR,
     cpu_upgrade_costs_eur: dict[str, Any] | None = None,
+    reference_cpu_keys: Any = None,
+    ram_16gb_module_eur: float = DEFAULT_RAM_16GB_MODULE_EUR,
+    score_weights: Any = None,
 ) -> dict[str, Any]:
     """Extract a small structured hardware profile and an explainable ranking."""
+    weights = normalize_score_weights(score_weights)
     title = title or ""
     description = description or ""
     text = f"{title}\n{description}"
     cpu_name, cpu = _canonical_cpu(text)
+    mentioned_cpus = cpu_mentions(text)
     ram_gb = _find_ram_gb(text)
+    ram_modules = _find_ram_layout(text, ram_gb)
     storage = _find_storage(text)
     model = _find_model(title) or _find_model(text)
     target_system, target_family = _is_target_system(text)
@@ -902,11 +1243,14 @@ def analyze_hardware(
         cpu_detail = f"{known_cores} core / {known_threads} thread"
         if cpu.get("tdp_w"):
             cpu_detail += f" · nominal TDP {cpu['tdp_w']} W"
+        if cpu.get("architecture"):
+            cpu_detail += f" · {cpu['architecture']}, {cpu['launch_year']}"
     else:
         cpu_detail = "Model not recognized with enough certainty"
 
     pricing = _upgrade_estimates(
-        ram_gb, price, ram_8gb_upgrade_eur, ram_32gb_kit_eur
+        ram_gb, price, ram_8gb_upgrade_eur, ram_32gb_kit_eur,
+        ram_modules=ram_modules, ram_16gb_module_eur=ram_16gb_module_eur,
     )
     platform_upgrade = _find_platform_upgrade_profile(text) if target_system else None
     cpu_upgrade = _cpu_upgrade_estimate(platform_upgrade, cpu_name, cpu_upgrade_costs_eur)
@@ -931,6 +1275,7 @@ def analyze_hardware(
         target_system=target_system,
         pricing=pricing,
         estimated_cpu_key=None if cpu_name else _estimated_cpu_key(platform, text),
+        weights=weights,
     )
     score = score_parts["total"]
 
@@ -952,6 +1297,7 @@ def analyze_hardware(
                 platform=platform,
                 target_system=target_system,
                 pricing={"effective_price_override": upgrade_total},
+                weights=weights,
             )
             upgrade_score = upgrade_score_parts["total"]
     if non_system:
@@ -1009,15 +1355,28 @@ def analyze_hardware(
             )
     if cpu_note:
         missing.insert(0, cpu_note)
+    if len(mentioned_cpus) > 1:
+        missing.insert(0, "multiple CPUs mentioned (" + ", ".join(short_cpu_name(n) for n in mentioned_cpus)
+                       + f"); analysis uses {short_cpu_name(mentioned_cpus[0])}, verify which is installed")
 
     ai_note = _ai_note(gpu, bool(discrete_match), cpu_name)
+    cpu_benchmark = benchmark_for_name(cpu_name)
+    cpu_vs_reference = (
+        compare_to_references(cpu_benchmark, reference_cpus(reference_cpu_keys)) if cpu_name else []
+    )
     return {
         "model": model,
         "cpu": cpu_name,
         "cpu_detail": cpu_detail,
+        "cpu_candidates": mentioned_cpus if len(mentioned_cpus) > 1 else [],
+        "cpu_architecture": cpu.get("architecture") if cpu else None,
+        "cpu_launch_year": cpu.get("launch_year") if cpu else None,
+        "cpu_benchmark": cpu_benchmark,
+        "cpu_vs_reference": cpu_vs_reference,
         "cores": known_cores,
         "threads": known_threads,
         "ram_gb": ram_gb,
+        "ram_modules": ram_modules,
         "storage": storage,
         "gpu": gpu,
         "form_factor": form_factor,
@@ -1044,6 +1403,23 @@ def analyze_hardware(
     }
 
 
+def normalize_score_weights(weights: Any = None) -> dict[str, float]:
+    """Return component maxima summing to 100; invalid configuration means defaults."""
+    if weights is None:
+        return dict(DEFAULT_SCORE_WEIGHTS)
+    try:
+        if not isinstance(weights, dict) or set(weights) - set(DEFAULT_SCORE_WEIGHTS):
+            raise ValueError("unknown or malformed components")
+        merged = {key: float(weights.get(key, default)) for key, default in DEFAULT_SCORE_WEIGHTS.items()}
+        if any(value < 0 for value in merged.values()) or sum(merged.values()) <= 0:
+            raise ValueError("weights must be non-negative with a positive total")
+    except (TypeError, ValueError) as error:
+        logging.warning("Invalid hardware_score_weights (%s); using defaults", error)
+        return dict(DEFAULT_SCORE_WEIGHTS)
+    total = sum(merged.values())
+    return {key: value * 100 / total for key, value in merged.items()}
+
+
 def _score(
     cpu_name: str | None,
     ram_gb: int | None,
@@ -1052,20 +1428,27 @@ def _score(
     target_system: bool,
     pricing: dict[str, Any],
     estimated_cpu_key: str | None = None,
+    weights: dict[str, float] | None = None,
 ) -> dict[str, Any]:
-    """Return 100 explainable points: CPU 40, price 25, RAM 10, storage 10, platform 15."""
+    """Return 100 explainable points, by default CPU 40, price 25, RAM 10,
+    storage 10, platform 15; ``weights`` (normalized) rescales each component."""
     cpu_key = _cpu_key_for_name(cpu_name)
     cpu_estimated = False
-    if cpu_name:
-        cpu_points = round(CPU_PERFORMANCE_POINTS.get(cpu_key or "", 10) * CPU_WEIGHT)
-    elif estimated_cpu_key in CPU_PERFORMANCE_POINTS:
+    fraction, cpu_source = cpu_performance(cpu_key)
+    estimated_fraction, _source = cpu_performance(estimated_cpu_key)
+    if cpu_name and fraction is not None:
+        cpu_points = round(fraction * 50 * CPU_WEIGHT)
+    elif cpu_name:
+        cpu_points = round(10 * CPU_WEIGHT)
+        cpu_source = "tier"
+    elif estimated_fraction is not None:
         # Unknown CPU on a known platform: assume a typical part, with a discount.
-        cpu_points = round(
-            CPU_PERFORMANCE_POINTS[estimated_cpu_key] * CPU_WEIGHT * ESTIMATED_CPU_FACTOR
-        )
+        cpu_points = round(estimated_fraction * 50 * CPU_WEIGHT * ESTIMATED_CPU_FACTOR)
         cpu_estimated = True
+        cpu_source = "estimated"
     else:
         cpu_points = UNKNOWN_CPU_POINTS
+        cpu_source = "unknown"
 
     if "effective_price_override" in pricing:
         effective_price = pricing.get("effective_price_override")
@@ -1148,14 +1531,17 @@ def _score(
     low_power_points = 2 if cpu_tdp is not None and cpu_tdp <= 35 else 0
     platform_points = min(15, vpro_points + generation_points + pcie_points + low_power_points)
 
-    total = cpu_points + price_points + ram_points + storage_points + platform_points
+    maxima = weights or DEFAULT_SCORE_WEIGHTS
+    raw = {"cpu": cpu_points, "price": price_points, "ram": ram_points,
+           "storage": storage_points, "platform": platform_points}
+    # Each component is computed on its default scale, then rescaled.
+    parts = {key: round(raw[key] * maxima[key] / DEFAULT_SCORE_WEIGHTS[key]) for key in raw}
+    total = sum(parts.values())
     return {
-        "cpu": cpu_points,
+        **parts,
         "cpu_estimated": cpu_estimated,
-        "price": price_points,
-        "ram": ram_points,
-        "storage": storage_points,
-        "platform": platform_points,
+        "cpu_source": cpu_source,
+        "max": {key: round(value) for key, value in maxima.items()},
         "total": max(0, min(100, total)),
         "target_system": target_system,
     }
@@ -1191,10 +1577,16 @@ def enrich_item(
         ram_8gb_upgrade_eur = float(getattr(Config, "hardware_ram_8gb_upgrade_eur", DEFAULT_RAM_8GB_UPGRADE_EUR))
         ram_32gb_kit_eur = float(getattr(Config, "hardware_ram_32gb_kit_eur", DEFAULT_RAM_32GB_KIT_EUR))
         cpu_upgrade_costs_eur = getattr(Config, "hardware_cpu_upgrade_costs_eur", {})
+        reference_cpu_keys = getattr(Config, "hardware_reference_cpus", DEFAULT_REFERENCE_CPUS)
+        ram_16gb_module_eur = float(getattr(Config, "hardware_ram_16gb_module_eur", DEFAULT_RAM_16GB_MODULE_EUR))
+        score_weights = getattr(Config, "hardware_score_weights", None)
     except (ImportError, TypeError, ValueError):
         ram_8gb_upgrade_eur = DEFAULT_RAM_8GB_UPGRADE_EUR
         ram_32gb_kit_eur = DEFAULT_RAM_32GB_KIT_EUR
         cpu_upgrade_costs_eur = {}
+        reference_cpu_keys = DEFAULT_REFERENCE_CPUS
+        ram_16gb_module_eur = DEFAULT_RAM_16GB_MODULE_EUR
+        score_weights = None
     analysis = analyze_hardware(
         str(item.get("title") or ""),
         description,
@@ -1202,6 +1594,9 @@ def enrich_item(
         ram_8gb_upgrade_eur=ram_8gb_upgrade_eur,
         ram_32gb_kit_eur=ram_32gb_kit_eur,
         cpu_upgrade_costs_eur=cpu_upgrade_costs_eur,
+        reference_cpu_keys=reference_cpu_keys,
+        ram_16gb_module_eur=ram_16gb_module_eur,
+        score_weights=score_weights,
     )
     item["description"] = description
     item["hardware_analysis"] = analysis
@@ -1234,6 +1629,22 @@ def build_telegram_headline(item: dict[str, Any]) -> str:
     return headline
 
 
+def _benchmark_row(analysis: dict[str, Any]) -> str:
+    """"Bench: ST 2,105 · MT 8,008 · ×1.5 N100 · ×0.49 i5-12500T" or "Bench: N/A"."""
+    benchmark = analysis.get("cpu_benchmark")
+    if not benchmark:
+        return "Bench: N/A (no benchmark data for this CPU)"
+    def number(value: Any) -> str:
+        return f"{value:,}" if value else "N/A"
+    parts = [f"ST {number(benchmark.get('st'))}", f"MT <b>{number(benchmark.get('mt'))}</b>"]
+    for ref in analysis.get("cpu_vs_reference") or []:
+        if ref.get("mt_ratio") is None:
+            parts.append(f"vs {fmt.esc(ref['name'])} incomplete")
+        else:
+            parts.append(f"×{ref['mt_ratio']:.1f} {fmt.esc(ref['name'])}")
+    return "Bench: " + " · ".join(parts)
+
+
 def _hardware_rows(analysis: dict[str, Any]) -> list[str]:
     rows = []
     if analysis.get("cpu"):
@@ -1242,12 +1653,14 @@ def _hardware_rows(analysis: dict[str, Any]) -> list[str]:
         rows.append("CPU: ❓ not identified · score assumes a typical CPU for this platform")
     else:
         rows.append("CPU: ❓ not identified")
+    if analysis.get("cpu"):
+        rows.append(_benchmark_row(analysis))
     if analysis.get("cpu_note"):
         rows.append(f"   {fmt.italic(analysis['cpu_note'])}")
 
     platform = analysis.get("platform")
     if analysis.get("ram_gb") is not None:
-        ram = f"RAM: <b>{analysis['ram_gb']} GB</b>"
+        ram = f"RAM: <b>{analysis['ram_gb']} GB</b> ({ram_layout_label(analysis.get('ram_modules'))})"
         if platform and platform.get("max_ram_gb"):
             ram += f" · max {platform['max_ram_gb']} GB"
         rows.append(ram)
@@ -1329,10 +1742,11 @@ def _upgrade_rows(analysis: dict[str, Any]) -> list[str]:
 def _score_rows(analysis: dict[str, Any]) -> list[str]:
     parts = analysis.get("score_parts", {})
     estimated = parts.get("cpu_estimated")
+    maxima = parts.get("max") or DEFAULT_SCORE_WEIGHTS
     breakdown = (
-        f"CPU {parts.get('cpu', 0)}/40{'*' if estimated else ''} · "
-        f"Price {parts.get('price', 0)}/25 · RAM {parts.get('ram', 0)}/10 · "
-        f"Disk {parts.get('storage', 0)}/10 · Platform {parts.get('platform', 0)}/15"
+        f"CPU {parts.get('cpu', 0)}/{maxima['cpu']:.0f}{'*' if estimated else ''} · "
+        f"Price {parts.get('price', 0)}/{maxima['price']:.0f} · RAM {parts.get('ram', 0)}/{maxima['ram']:.0f} · "
+        f"Disk {parts.get('storage', 0)}/{maxima['storage']:.0f} · Platform {parts.get('platform', 0)}/{maxima['platform']:.0f}"
     )
     rows = [fmt.code(breakdown)]
     if estimated:

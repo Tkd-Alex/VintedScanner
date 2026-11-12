@@ -25,7 +25,13 @@ LISTING_FIELDS = (
     "score", "upgrade_score", "verdict", "tier", "model", "platform", "generation",
     "cpu", "cores", "threads", "ram_gb", "storage", "gpu",
     "total_16_eur", "total_32_eur", "total_16_cpu_eur", "total_32_cpu_eur",
-    "build_estimate_eur", "sections",
+    "build_estimate_eur", "sections", "score_version",
+)
+# Columns derived from the hardware analysis; rescore.py rewrites only these,
+# never the listing identity (title, price, links, query, description) or status.
+ANALYSIS_FIELDS = tuple(
+    field for field in LISTING_FIELDS
+    if field not in ("title", "price_eur", "url", "image_url", "matched_query", "description")
 )
 RUN_MODE_FIELDS = (
     "searches", "failed_searches", "skipped_searches", "listings", "new", "matches", "notified",
@@ -70,13 +76,14 @@ CREATE TABLE IF NOT EXISTS listings (
     total_16_eur REAL, total_32_eur REAL, total_16_cpu_eur REAL, total_32_cpu_eur REAL,
     build_estimate_eur REAL,
     sections TEXT,
+    score_version TEXT,
     PRIMARY KEY (mode, item_id)
 );
 CREATE INDEX IF NOT EXISTS listings_status ON listings (mode, status);
 CREATE INDEX IF NOT EXISTS listings_notified ON listings (notified_at);
 CREATE INDEX IF NOT EXISTS runs_started ON runs (source, started_at);
 """
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def utc_now() -> str:
@@ -103,7 +110,16 @@ class Store:
         self.db = connect(self.path)
         with self.db:
             self.db.executescript(SCHEMA)
+            self._migrate()
             self.db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+
+    def _migrate(self) -> None:
+        """Bring a database created by an older release up to SCHEMA_VERSION."""
+        columns = {row["name"] for row in self.db.execute("PRAGMA table_info(listings)")}
+        if "score_version" not in columns:
+            # Version 2: which hardware_enricher.SCORING_VERSION produced the score.
+            # Older rows stay NULL until rescore.py recalculates them.
+            self.db.execute("ALTER TABLE listings ADD COLUMN score_version TEXT")
 
     def close(self) -> None:
         self.db.close()
@@ -176,6 +192,26 @@ class Store:
                 f"ON CONFLICT (mode, item_id) DO UPDATE SET {', '.join(updates)}",
                 values,
             )
+
+    def replace_analysis(self, mode: str, item_id: str, fields: dict[str, Any]) -> bool:
+        """Overwrite the analysis columns of one listing, NULLs included.
+
+        Unlike record_listing, a None value clears the stored one, so a value the
+        old parser misread (for example 500 GB of RAM) does not survive a rescore.
+        """
+        unknown = set(fields) - set(ANALYSIS_FIELDS)
+        if unknown:
+            raise ValueError(f"not analysis fields: {sorted(unknown)}")
+        values = dict(fields)
+        if isinstance(values.get("sections"), (list, dict)):
+            values["sections"] = json.dumps(values["sections"], ensure_ascii=False)
+        assignments = ", ".join(f"{field} = :{field}" for field in values)
+        with self.db:
+            cursor = self.db.execute(
+                f"UPDATE listings SET {assignments} WHERE mode = :_mode AND item_id = :_item_id",
+                {**values, "_mode": mode, "_item_id": str(item_id)},
+            )
+        return cursor.rowcount == 1
 
     def migrate_legacy_ledgers(self, ledgers: dict[str, Path], filtered: Path | None = None) -> int:
         """Import the old .txt ID ledgers once; the files are left untouched."""

@@ -27,10 +27,16 @@ const FACET_FILTERS = {
   cpu: [["cpu", "CPU"]],
 };
 const SORTS = {
-  mini_pc: [["newest", "Newest first"], ["value", "Best value"], ["score", "Highest score"], ["price", "Price: low to high"], ["price_desc", "Price: high to low"]],
+  mini_pc: [["newest", "Newest first"], ["perf_value", "Most CPU per euro"], ["fastest", "Fastest CPU"], ["value", "Best score per euro"], ["score", "Highest score"], ["price", "Price: low to high"], ["price_desc", "Price: high to low"]],
   ram: [["newest", "Newest first"], ["price", "Price: low to high"], ["price_desc", "Price: high to low"]],
   cpu: [["newest", "Newest first"], ["price", "Price: low to high"], ["price_desc", "Price: high to low"]],
 };
+// Hardware filters for mini PCs; min_mt options are built from the first reference CPU.
+const HARDWARE_FILTERS = [
+  ["min_threads", "Threads", [["4", "4+ threads"], ["6", "6+ threads"], ["8", "8+ threads"], ["12", "12+ threads"]]],
+  ["min_ram", "RAM", [["8", "8 GB+"], ["16", "16 GB+"], ["32", "32 GB+"]]],
+];
+const PERF_STEPS = [1, 1.5, 2, 3];
 const RUN_STATE = {
   ok: ["✓", "Completed"],
   problems: ["!", "Completed with problems"],
@@ -70,6 +76,17 @@ const median = (values) => {
   return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
 };
 
+// 9501 -> "9.5k", 15000 -> "15k", 0 -> "0".
+const thousands = (value) => value == null ? "–" : value >= 1000 ? `${Number((value / 1000).toFixed(1))}k` : String(value);
+let referencesPromise = null;
+const loadReferences = () => (referencesPromise ??= api("references").then((data) => data, () => ({ items: [], source: "" })));
+let REFS = [];
+// "×1.5 N100" against the first reference, or "" when either benchmark is missing.
+function vsFirstReference(mt) {
+  const ref = REFS[0];
+  return mt && ref?.mt ? `×${(mt / ref.mt).toFixed(1)} ${ref.name}` : "";
+}
+
 async function api(path, params = {}) {
   const query = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== "" && v != null));
   const response = await fetch(`/api/${path}${query.size ? `?${query}` : ""}`);
@@ -99,6 +116,7 @@ async function render() {
   searchInput.value = params.q || "";
   hideTooltip();
   try {
+    REFS = (await loadReferences()).items || [];
     if (page === "overview") await renderOverview(params);
     else if (page === "runs") await renderRuns(params);
     else await renderCatalog(page, params);
@@ -130,6 +148,11 @@ function buildLine(item) {
   return "";
 }
 
+function benchLine(item) {
+  if (item.mode !== "mini_pc" || !item.bench_mt) return "";
+  return [`MT ${thousands(item.bench_mt)}`, vsFirstReference(item.bench_mt)].filter(Boolean).join(" · ");
+}
+
 function metaLine(item) {
   if (item.mode === "mini_pc") return item.platform || item.model || item.matched_query || "";
   if (item.mode === "cpu") return item.cpu || "";
@@ -148,6 +171,7 @@ function card(item) {
       <div class="card__build">${esc(buildLine(item))}</div>
       <div class="card__title">${esc(item.title)}</div>
       <div class="card__meta">${esc(metaLine(item))}</div>
+      ${benchLine(item) ? `<div class="card__bench">${esc(benchLine(item))}</div>` : ""}
     </button>`;
 }
 
@@ -193,6 +217,16 @@ async function renderOverview(params) {
     <section class="block">
       <div class="block__head">
         <div>
+          <h2>Value map</h2>
+          <p class="subtle">CPU performance against the 16 GB build cost. Up and to the left is better; orange dots are the best deals,
+            where no other listing is both cheaper and faster.</p>
+        </div>
+      </div>
+      ${valueMap(list.items, market.value_frontier, REFS)}
+    </section>
+    <section class="block">
+      <div class="block__head">
+        <div>
           <h2>Prices by platform</h2>
           <p class="subtle">Each dot is one alerted listing; the bar marks the median. Select a dot to open it.</p>
         </div>
@@ -203,12 +237,23 @@ async function renderOverview(params) {
       </div>
       ${priceBoard(list.items, params.metric === "total_32_eur" ? "total_32_eur" : "price_eur")}
     </section>
-    ${shelf("Best value", "Score per euro of the 16 GB build.", market.best_value, "#/mini_pc?sort=value")}
+    ${shelf("Most CPU per euro", "PassMark multithread points per euro of the 16 GB build.", market.best_perf_value, "#/mini_pc?sort=perf_value")}
+    ${shelf("Best score per euro", "Score per euro of the 16 GB build.", market.best_value, "#/mini_pc?sort=value")}
     ${shelf("Cheapest with 32 GB", "Lowest total once RAM is upgraded to 32 GB.", market.cheapest_32, "#/mini_pc?sort=price")}
     ${shelf("Highest score", "Best current specification for a Proxmox node.", market.top_score, "#/mini_pc?sort=score")}
     <section class="block">
       <div class="block__head"><h2>By CPU generation</h2></div>
       ${generationTable(market.by_generation)}
+    </section>
+    <section class="block">
+      <div class="block__head">
+        <div>
+          <h2>CPU price guide</h2>
+          <p class="subtle">Cheapest performance first: median euros of the 16 GB build per 1,000 PassMark multithread points.
+            ${esc(overview.references?.source || "")}. Scores of older alerts used the earlier tier scale, so compare history by performance per euro.</p>
+        </div>
+      </div>
+      ${cpuTable(market.by_cpu)}
     </section>` : ""}`;
 
   view.querySelectorAll("[data-metric]").forEach((button) => button.addEventListener("click", () =>
@@ -277,16 +322,96 @@ function shelf(title, subtitle, items, href) {
     </section>`;
 }
 
+function niceCeil(value) {
+  const step = niceStep(value);
+  return Math.ceil(value / step) * step;
+}
+
+function valueMap(items, frontierIds, refs) {
+  const cost = (item) => item.total_16_eur ?? item.price_eur;
+  const points = items.filter((item) => item.bench_mt && cost(item) != null);
+  const skipped = items.length - points.length;
+  if (!points.length) return `<p class="empty">No alerted listing has a CPU with benchmark data yet.</p>`;
+  const frontier = new Set(frontierIds);
+  const costs = points.map(cost);
+  const xStep = niceStep(Math.max(...costs) - Math.min(...costs) || 50);
+  const xLo = Math.floor(Math.min(...costs) / xStep) * xStep;
+  const xHi = Math.ceil(Math.max(...costs) / xStep) * xStep || xLo + xStep;
+  const refLines = refs.filter((ref) => ref.mt);
+  const yHi = niceCeil(Math.max(...points.map((i) => i.bench_mt), ...refLines.map((r) => r.mt)) * 1.05);
+  const yStep = niceStep(yHi);
+  const x = (v) => ((v - xLo) / (xHi - xLo)) * 100;
+  const y = (v) => (v / yHi) * 100;
+  const xTicks = [], yTicks = [];
+  for (let v = xLo; v <= xHi + 0.001; v += xStep) xTicks.push(v);
+  for (let v = 0; v <= yHi + 0.001; v += yStep) yTicks.push(v);
+  // The frontier is a staircase: each better deal costs more and is faster.
+  const steps = points.filter((i) => frontier.has(i.item_id)).sort((a, b) => cost(a) - cost(b));
+  const stair = steps.flatMap((item, index) => {
+    const here = `${x(cost(item))},${100 - y(item.bench_mt)}`;
+    return index ? [`${x(cost(item))},${100 - y(steps[index - 1].bench_mt)}`, here] : [here];
+  }).join(" ");
+  // Draw best deals last so they sit on top of ordinary listings.
+  const ordered = [...points].sort((a, b) => frontier.has(a.item_id) - frontier.has(b.item_id));
+
+  return `
+    <figure class="vmap" aria-label="Scatter plot of CPU benchmark against 16 GB build cost">
+      <div class="vmap__y" aria-hidden="true">${yTicks.map((t) => `<span style="bottom:${y(t)}%">${thousands(t)}</span>`).join("")}</div>
+      <div class="vmap__plot">
+        ${yTicks.map((t) => `<i class="vmap__grid" style="bottom:${y(t)}%"></i>`).join("")}
+        ${refLines.map((ref) => `<div class="vmap__ref" style="bottom:${y(ref.mt)}%"><span>${esc(ref.name)} · ${thousands(ref.mt)}</span></div>`).join("")}
+        ${steps.length > 1 ? `<svg class="vmap__stair" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><polyline points="${stair}"/></svg>` : ""}
+        ${ordered.map((item) => {
+          const deal = frontier.has(item.item_id);
+          const ratio = vsFirstReference(item.bench_mt);
+          return `<button class="vdot${deal ? " vdot--deal" : ""}" type="button" style="left:${x(cost(item))}%;bottom:${y(item.bench_mt)}%"
+            data-open="mini_pc/${esc(item.item_id)}"
+            data-tip="${esc(`${euro(cost(item))} with 16 GB${deal ? " · best deal" : ""}\n${item.title}\n${item.cpu || ""}\nMT ${item.bench_mt.toLocaleString("en-GB")}${ratio ? ` · ${ratio}` : ""}`)}"
+            aria-label="${esc(`${item.title}: ${euro(cost(item))}, multithread ${item.bench_mt}${deal ? ", best deal" : ""}`)}"></button>`;
+        }).join("")}
+      </div>
+      <div></div>
+      <div class="vmap__x" aria-hidden="true">${xTicks.map((t) => `<span style="left:${x(t)}%">${euro(t)}</span>`).join("")}</div>
+      <div></div>
+      <figcaption class="board__legend">
+        <span><i class="legend-vdot"></i>Listing</span>
+        <span><i class="legend-vdot legend-vdot--deal"></i>Best deal (cost/performance frontier)</span>
+        ${refLines.length ? `<span><i class="legend-ref"></i>Reference CPU</span>` : ""}
+        <span class="muted">x: 16 GB build cost · y: PassMark multithread${skipped ? ` · ${plural(skipped, "listing")} without benchmark data not shown` : ""}</span>
+      </figcaption>
+    </figure>`;
+}
+
+function cpuTable(rows) {
+  const ranked = rows.filter((row) => row.median_bench_mt)
+    .sort((a, b) => (a.eur_per_1k_mt ?? Infinity) - (b.eur_per_1k_mt ?? Infinity)).slice(0, 20);
+  if (!ranked.length) return `<p class="empty">No alerted listing has a CPU with benchmark data yet.</p>`;
+  const ref = REFS[0];
+  return `
+    <div class="table-wrap"><table>
+      <thead><tr><th>CPU</th><th class="num">Alerts</th><th class="num">Median price</th><th class="num">Multithread</th>
+        ${ref ? `<th class="num">vs ${esc(ref.name)}</th>` : ""}<th class="num">€ per 1k MT</th></tr></thead>
+      <tbody>${ranked.map((row) => `
+        <tr><td><a class="link" href="#/mini_pc?cpu=${encodeURIComponent(row.name)}">${esc(row.name)}</a></td>
+          <td class="num">${row.count}</td><td class="num">${euro(row.median_price)}</td>
+          <td class="num">${Math.round(row.median_bench_mt).toLocaleString("en-GB")}</td>
+          ${ref ? `<td class="num">${ref.mt ? `×${(row.median_bench_mt / ref.mt).toFixed(1)}` : "–"}</td>` : ""}
+          <td class="num">${euro(row.eur_per_1k_mt)}</td></tr>`).join("")}
+      </tbody>
+    </table></div>`;
+}
+
 function generationTable(rows) {
   const sorted = [...rows].sort((a, b) => b.name - a.name);
   return `
     <div class="table-wrap"><table>
       <thead><tr><th>Intel generation</th><th class="num">Alerts</th><th class="num">Lowest price</th>
-        <th class="num">Median price</th><th class="num">Median with 32 GB</th><th class="num">Median score</th><th class="num">Best score</th></tr></thead>
+        <th class="num">Median price</th><th class="num">Median with 32 GB</th><th class="num">Median MT</th><th class="num">€ per 1k MT</th><th class="num">Median score</th><th class="num">Best score</th></tr></thead>
       <tbody>${sorted.map((row) => `
         <tr><td><a class="link" href="#/mini_pc?generation=${row.name}">${row.name}th gen</a></td>
           <td class="num">${row.count}</td><td class="num">${euro(row.min_price)}</td>
           <td class="num">${euro(row.median_price)}</td><td class="num">${euro(row.median_total_32)}</td>
+          <td class="num">${row.median_bench_mt ? Math.round(row.median_bench_mt).toLocaleString("en-GB") : "–"}</td><td class="num">${euro(row.eur_per_1k_mt)}</td>
           <td class="num">${row.median_score ?? "–"}</td><td class="num">${row.best_score ?? "–"}</td></tr>`).join("")}
       </tbody>
     </table></div>`;
@@ -308,6 +433,7 @@ async function renderCatalog(mode, params) {
     <form class="filters" id="filters">
       ${select("status", "Listings shown", STATUS_FILTER[mode])}
       ${FACET_FILTERS[mode].map(([name, label]) => select(name, label, facetOptions(name, label))).join("")}
+      ${mode === "mini_pc" ? hardwareFilters(select) : ""}
       <input name="min_price" type="number" min="0" inputmode="decimal" placeholder="From €" value="${esc(params.min_price)}" aria-label="Minimum price">
       <input name="max_price" type="number" min="0" inputmode="decimal" placeholder="To €" value="${esc(params.max_price)}" aria-label="Maximum price">
       ${params.run_id ? `<button class="pill" type="button" aria-pressed="true" data-drop="run_id">One run only ✕</button>` : ""}
@@ -336,6 +462,16 @@ async function renderCatalog(mode, params) {
     offset += next.items.length;
     if (offset >= next.total) event.target.remove();
   });
+}
+
+function hardwareFilters(select) {
+  const filters = HARDWARE_FILTERS.map(([name, label, options]) => select(name, label, [["", label], ...options]));
+  const ref = REFS[0];
+  if (ref?.mt) {
+    const options = PERF_STEPS.map((step) => [String(Math.round(ref.mt * step)), `≥ ${step}× ${ref.name}`]);
+    filters.push(select("min_mt", "CPU performance", [["", "CPU performance"], ...options]));
+  }
+  return filters.join("");
 }
 
 /* -- runs ------------------------------------------------------------------- */
@@ -430,10 +566,16 @@ function detail(item) {
     ["Platform", item.platform || item.model],
     ["CPU", item.cpu && `${item.cpu}${cores}`],
     ["Generation", item.generation && `${item.generation}th gen`],
+    ["Benchmark", item.mode === "mini_pc" && item.cpu && (item.bench_mt
+      ? `PassMark multithread ${item.bench_mt.toLocaleString("en-GB")}, single thread ${item.bench_st?.toLocaleString("en-GB") ?? "N/A"}`
+      : "N/A (no benchmark data for this CPU)")],
+    ["Compared with", (item.vs_reference || []).map((ref) => ref.mt_ratio == null
+      ? `${ref.name}: incomplete` : `×${ref.mt_ratio.toFixed(2)} ${ref.name}`).join(", ")],
     ["RAM", item.ram_gb && `${item.ram_gb} GB`],
     ["Disk", item.storage],
     ["GPU", item.gpu],
-    ["Score", item.score != null && `${item.score}/100${item.upgrade_score != null ? `, ${item.upgrade_score}/100 after upgrade` : ""}`],
+    ["Score", item.score != null && `${item.score}/100${item.upgrade_score != null ? `, ${item.upgrade_score}/100 after upgrade` : ""}`
+      + (item.mode === "mini_pc" && !item.score_current ? " (older scoring rules, not recalculated)" : "")],
     ["With 16 GB", item.total_16_eur != null && euro(item.total_16_eur)],
     ["With 32 GB", item.total_32_eur != null && euro(item.total_32_eur)],
     ["16 GB and CPU upgrade", item.total_16_cpu_eur != null && euro(item.total_16_cpu_eur)],

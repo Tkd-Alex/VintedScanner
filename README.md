@@ -244,7 +244,7 @@ python3 vinted_scanner.py -h
 
 ### Telegram Hardware Enrichment and Ranking
 
-This tailored version adds a local hardware analysis to each relevant Telegram alert. It shows a current-spec score weighted **CPU 40 points, estimated total price 25, RAM 10, storage 10, platform 15**, plus a separate upgrade-opportunity score when the model has a documented CPU candidate and its cost is configured. The message displays estimates for 16 GB and 32 GB RAM, with and without the CPU upgrade. Scores are informational and never suppress a matching listing.
+This tailored version adds a local hardware analysis to each relevant Telegram alert. It shows a current-spec score weighted by default **CPU 40 points, estimated total price 25, RAM 10, storage 10, platform 15** (set your own with `hardware_score_weights`; the CPU part comes from PassMark benchmark ratings), a `Bench` line comparing the CPU with reference CPUs (`hardware_reference_cpus`, default N100 and i5-12500T), plus a separate upgrade-opportunity score when the model has a documented CPU candidate and its cost is configured. The message displays estimates for 16 GB and 32 GB RAM, with and without the CPU upgrade. Scores are informational and never suppress a matching listing.
 
 The platform part comes from a local table of the supported models (`PLATFORM_PROFILES` in `hardware_enricher.py`): CPU generation, official maximum RAM, PCIe riser slot (ThinkCentre M720q/M920q), the highest CPU class the chassis ships with, and whether the chipset supports Intel vPro/AMT. Remote power control and console through AMT matter for a node without anyone on site, so a vPro chipset paired with a vPro CPU earns the most platform points; a vPro chipset with a non-vPro CPU (e.g. i5-8400T, i3) is reported as such. 6th/7th-gen platforms are still notified, with fewer platform points and a "legacy platform" warning, and are never labelled "Strong candidate". When the CPU model is not stated, the score uses a typical CPU for the platform and the tier named in the title (i3/i5/i7/Celeron), discounted and marked as an estimate. On 35 W-only chassis (Dell OptiPlex Micro, Lenovo 6th/7th-gen Tiny, HP ProDesk 400 Mini) a listed non-T CPU such as `i7 8700` is read as its T variant, with a note to verify.
 
@@ -363,6 +363,32 @@ message, become runs. Messages in the older alert format are skipped and
 counted. The import can be repeated safely: nothing is duplicated. Keep the
 export out of Git; it contains your chat history.
 
+### Recalculating scores after a rule change
+
+Scores are stored when an alert is sent, so after an update that changes
+parsing or scoring the dashboard would mix old and new scores. Each mini-PC
+listing records the scoring version that produced it (`score_version`), and
+the dashboard marks older scores in the listing details. To bring them up to
+date:
+
+```bash
+python3 rescore.py --dry-run   # list every change, write nothing
+python3 rescore.py             # back up vinted_scanner.db, then update it
+```
+
+Alerted mini-PC listings (`notified`, `dry_run`, `failed`) are analysed again
+from their stored title, price and description, through the same code that
+builds a new alert. Only the analysis columns change (score, verdict, CPU, RAM,
+disk, platform, costs, alert sections); status, dates, title, price, links and
+the description are kept, and nothing is sent. The backup is written next to
+the database as `vinted_scanner.db.bak-<UTC time>`. A second run does nothing
+until the scoring version changes again; `--all` recalculates every listing.
+
+Listings restored from Telegram only have the description excerpt shown in the
+alert, so the CPU, RAM and disk lines that the old alert had identified are
+reused; anything the old alert got wrong there is kept. Messages already sent
+on Telegram are not changed.
+
 ### Dashboard
 
 ```bash
@@ -373,13 +399,21 @@ python3 dashboard.py --port 8080 --db /path/to/vinted_scanner.db
 The dashboard is a read-only page served with Python's standard library (no
 extra dependencies). It has five sections:
 
-- **Overview**: how many mini PCs were alerted and what a 32 GB node costs,
-  the asking prices of each platform on a common scale (or the price once
-  upgraded to 32 GB), the best value, cheapest 32 GB and highest-score
-  listings, and a summary per CPU generation.
+- **Overview**: how many mini PCs were alerted and what a 32 GB node costs;
+  a **value map** plotting CPU benchmark against the 16 GB build cost, with
+  the best deals (no other listing is both cheaper and faster) and lines for
+  the reference CPUs; the asking prices of each platform on a common scale (or
+  the price once upgraded to 32 GB); the most CPU per euro, best score per
+  euro, cheapest 32 GB and highest-score listings; a summary per CPU
+  generation; and a **CPU price guide** ranking CPUs by euros per 1,000
+  PassMark multithread points.
 - **Mini PC**, **RAM** and **CPU**: every alert as a shop catalogue with photos,
-  filters (platform, generation, verdict, tier, CPU, price), sorting, and a
-  detail panel with all the information from the alert. The status filter also
+  filters (platform, generation, verdict, tier, CPU, price, and for mini PCs
+  threads, RAM and CPU performance relative to the first reference CPU),
+  sorting (including most CPU per euro and fastest CPU), and a detail panel
+  with all the information from the alert plus the benchmark comparison.
+  Benchmarks are looked up from the CPU catalog by CPU name, so alerts stored
+  before benchmarks existed, or imported from Telegram, get them too. The status filter also
   shows listings that were filtered out, not delivered or not a candidate.
 - **Runs**: the health of the latest runs at a glance, then each run with its
   counters per mode, a link to the alerts it sent and its problems.
