@@ -382,6 +382,7 @@ class ItemProcessingTests(TempStoreMixin, unittest.TestCase):
         self.assertEqual((row["status"], row["price_eur"], row["matched_query"]), ("notified", 10.0, "M920q"))
         self.assertEqual((row["cpu"], row["ram_gb"]), ("Intel Core i5-8600T", 16))
         self.assertIsNotNone(row["score"])
+        self.assertEqual(row["score_version"], scanner.hardware_enricher.SCORING_VERSION)
         self.assertEqual(row["image_url"], "https://example.test/image.jpg")
         self.assertIn("Hardware", row["sections"])
         send_notifications.assert_called_once()

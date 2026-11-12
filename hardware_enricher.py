@@ -992,6 +992,11 @@ def _cpu_upgrade_estimate(
     }
 
 
+# Bump whenever parsing or scoring changes what an alert says about a listing.
+# Stored with each listing (score_version), so the dashboard can tell scores of
+# the current rules from older ones; rescore.py recalculates the older ones.
+SCORING_VERSION = "1"
+
 # Bump whenever target/exclusion rules change, so listings filtered by an older
 # rule set are evaluated again instead of staying hidden forever.
 FILTER_RULES_VERSION = "3"
