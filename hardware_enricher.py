@@ -328,7 +328,7 @@ NON_VPRO_CPU_KEYS = {
 
 
 def _platform(
-    pattern: str, name: str, generation: int | None, vpro: str, max_ram_gb: int,
+    pattern: str, name: str, generation: int | None, vpro: str, max_ram_gb: int | None,
     pcie_slot: bool | None, max_tdp_w: int | None, typical_cpu: str,
     cpu_generations: tuple[int, ...] | None = None,
 ) -> dict[str, Any]:
@@ -349,6 +349,11 @@ def _platform(
 # chassis ships with (35 = T-series only). None means "not confirmed here".
 # cpu_generations lists the Intel Core generations the model was offered with.
 _GEN = r"\s*(?:Gen\.?|G)\s*"
+
+
+def _dell_micro(number: int) -> str:
+    """Match "OptiPlex 7010 Micro" and Dell's newer "OptiPlex Micro 7020" order."""
+    return rf"\bOptiPlex\s+(?:{number}\s+Micro|Micro\s+{number})\b"
 PLATFORM_PROFILES: list[dict[str, Any]] = [
     # 11th-13th gen. Lenovo values from the PSREF spec sheets of each model
     # (psref.lenovo.com, ThinkCentre_<model>_Spec.pdf, read 2026-11-09). HP and
@@ -364,6 +369,16 @@ PLATFORM_PROFILES: list[dict[str, Any]] = [
     _platform(r"\bEliteDesk\s+800\s+G8\b", "HP EliteDesk 800 G8 Mini", 11, "yes", 64, None, None, "i511500t"),
     _platform(r"\b(?:EliteDesk|Elite\s+Mini)\s+800\s+G9\b", "HP Elite Mini 800 G9", 12, "verify", 64, None, None, "i512500t"),
     _platform(r"\bOptiPlex\s+7090\b", "Dell OptiPlex 7090 Micro", 11, "yes", 64, None, 65, "i511500t", (10, 11)),
+    # 12th-14th gen Dell Micros. Their numbers clash with older Dell products
+    # (OptiPlex 7010 of 2012, OptiPlex 3000 Thin Client), so "Micro" must be
+    # named next to the model. Dell's spec sheets were not read for this change,
+    # so max RAM, vPro, PCIe and TDP stay unknown / "to verify"; only the name,
+    # CPU generation and typical CPU are used for scoring.
+    _platform(_dell_micro(7020), "Dell OptiPlex Micro 7020", 14, "verify", None, None, None, "i514500t", (12, 13, 14)),
+    _platform(_dell_micro(7010), "Dell OptiPlex 7010 Micro", 13, "verify", None, None, None, "i513500t", (12, 13)),
+    _platform(_dell_micro(7000), "Dell OptiPlex 7000 Micro", 12, "verify", None, None, None, "i512500t"),
+    _platform(_dell_micro(5000), "Dell OptiPlex 5000 Micro", 12, "verify", None, None, None, "i512500t"),
+    _platform(_dell_micro(3000), "Dell OptiPlex 3000 Micro", 12, "verify", None, None, None, "i512500t"),
     _platform(r"\bM920x\b", "Lenovo ThinkCentre M920x Tiny", 8, "yes", 32, True, 65, "i58500t", (8, 9)),
     _platform(r"\bM920q?\b", "Lenovo ThinkCentre M920q Tiny", 8, "yes", 32, True, 65, "i58500t", (8, 9)),
     _platform(r"\bM720q?\b", "Lenovo ThinkCentre M720q Tiny", 8, "no", 32, True, 65, "i58500t", (8, 9)),
@@ -766,22 +781,27 @@ def fetch_listing_description(
 def _find_ram_gb(text: str) -> int | None:
     # Prefer number-first phrasing: "16GB RAM". Do this before "RAM 512GB"
     # because in "16GB RAM 512GB NVMe" the latter sequence would misread SSD size as RAM.
-    explicit_after = re.search(r"\b(\d{1,3})\s*(?:gb|go)\s*(?:ddr[345]\s*)?(?:ram|memory|di ram|de ram)\b", text, re.I)
-    if explicit_after:
-        return int(explicit_after.group(1))
-    explicit = re.search(r"\b(?:ram|memory|memoria|m[eé]moire)\s*[:=]\s*(\d{1,3})\s*(?:gb|go)\b", text, re.I)
-    if explicit:
-        return int(explicit.group(1))
-    explicit = re.search(r"\b(?:ram|memory|memoria|m[eé]moire)\s+(\d{1,3})\s*(?:gb|go)\b", text, re.I)
-    if explicit:
-        return int(explicit.group(1))
+    # Stay on one line ([ \t], not \s) and accept only plausible sizes: a title
+    # ending in "SSD 500GO" followed by a description starting "RAM : 8 Go"
+    # must not read as 500 GB of RAM.
+    explicit_patterns = (
+        r"\b(\d{1,3})[ \t]*(?:gb|go)[ \t]*(?:ddr[345][ \t]*)?(?:ram|memory|di ram|de ram)\b",
+        r"\b(?:ram|memory|memoria|m[eé]moire)[ \t]*[:=][ \t]*(\d{1,3})[ \t]*(?:gb|go)\b",
+        r"\b(?:ram|memory|memoria|m[eé]moire)[ \t]+(\d{1,3})[ \t]*(?:gb|go)\b",
+    )
+    for pattern in explicit_patterns:
+        for match in re.finditer(pattern, text, re.I):
+            if int(match.group(1)) in PLAUSIBLE_RAM_SIZES_GB:
+                return int(match.group(1))
 
     # Common resale title pattern: "i5-8600T | 16GB | 256GB SSD". Treat as
     # RAM the first capacity that is not attached to an explicit storage label.
+    # "8Go SSD 256" is RAM followed by the drive, so tiny "GB SSD" readings
+    # do not count as storage (same threshold as _find_storage).
     storage_spans = [m.span() for m in re.finditer(
-        r"\b\d+(?:[.,]\d+)?\s*(?:gb|tb|go|to)\s*(?:nvme|ssd|hdd|sshd|sata|m\.2|hard\s?disk|hard\s?drive|emmc)",
+        r"\b(\d+(?:[.,]\d+)?)\s*(gb|tb|go|to)\s*(?:nvme|ssd|hdd|sshd|sata|m\.2|hard\s?disk|hard\s?drive|emmc)",
         text, re.I
-    )]
+    ) if m.group(2).lower() in ("tb", "to") or float(m.group(1).replace(",", ".")) >= MIN_DRIVE_GB]
     capacity_matches = list(re.finditer(r"\b(\d{1,4})\s*(?:gb|go)\b", text, re.I))
     for match in capacity_matches:
         # Mini-PC RAM sizes; larger numbers in "256go/8go" style titles are storage.
@@ -795,6 +815,9 @@ def _find_ram_gb(text: str) -> int | None:
             return int(match.group(1))
     return None
 
+
+# Smaller "GB SSD" readings come from RAM written next to the drive type.
+MIN_DRIVE_GB = 16
 
 RAM_LAYOUT_RE = re.compile(r"\b([1-4])\s*[x×*]\s*(\d{1,2})\s*(?:gb|go)\b", re.I)
 RAM_PAIR_RE = re.compile(r"\b(\d{1,2})\s*(?:gb|go)?\s*\+\s*(\d{1,2})\s*(?:gb|go)\b", re.I)
@@ -849,13 +872,25 @@ def _find_storage(text: str) -> list[str]:
     for match in pattern_a.finditer(text):
         capacity = match.group(1).replace(",", ".")
         unit = _storage_unit(match.group(2))
+        # "8Go SSD 256": the 8 GB is the RAM, not a drive.
+        if unit == "GB" and float(capacity) < MIN_DRIVE_GB:
+            continue
         kind = re.sub(r"\s+", " ", match.group(3)).upper()
         found.append((match.start(), f"{capacity} {unit} {kind}"))
-    # Reverse order: NVMe 512GB / SSD da 512 GB.
-    pattern_b = re.compile(r"\b(nvme|ssd|hdd|sshd|sata\s+ssd)\s*(?:da|of|de)?\s*(\d+(?:[.,]\d+)?)\s*(gb|tb|go|to)\b", re.I)
+    # Reverse order: NVMe 512GB / SSD da 512 GB / SSD M.2 256GB.
+    pattern_b = re.compile(
+        r"\b(nvme|ssd|hdd|sshd|sata\s+ssd)(\s+m\.2)?\s*(?:da|of|de)?\s*(\d+(?:[.,]\d+)?)\s*(gb|tb|go|to)\b", re.I
+    )
     for match in pattern_b.finditer(text):
-        capacity = match.group(2).replace(",", ".")
-        found.append((match.start(), f"{capacity} {_storage_unit(match.group(3))} {match.group(1).upper()}"))
+        capacity = match.group(3).replace(",", ".")
+        kind = match.group(1).upper() + (" M.2" if match.group(2) else "")
+        found.append((match.start(), f"{capacity} {_storage_unit(match.group(4))} {kind}"))
+    # Unit omitted after the drive type: "SSD 256". Only common drive sizes.
+    pattern_c = re.compile(
+        r"\b(nvme|ssd)\s+(120|128|240|250|256|480|500|512)\b(?!\s*(?:gb|go|tb|to|mb|mhz|[.,]\d))", re.I
+    )
+    for match in pattern_c.finditer(text):
+        found.append((match.start(), f"{match.group(2)} GB {match.group(1).upper()}"))
     # Remove duplicate readings of the same span/value.
     result: list[str] = []
     for _, value in sorted(found):
@@ -955,7 +990,7 @@ def _cpu_upgrade_estimate(
 
 # Bump whenever target/exclusion rules change, so listings filtered by an older
 # rule set are evaluated again instead of staying hidden forever.
-FILTER_RULES_VERSION = "2"
+FILTER_RULES_VERSION = "3"
 
 # Applied to the listing title only: descriptions of complete systems often
 # mention fans, power adapters or brackets ("alimentatore incluso").
@@ -972,7 +1007,8 @@ PARTS_OR_LOT_TITLE_RE = re.compile(
 # "M920q i5-8500T 16GB con antenna WiFi" is still treated as a system.
 COMPONENT_TITLE_RE = re.compile(
     r"\b(?:staffa|staffe|antenna|antenne|ventola|ventole|dissipatore|heatsink|"
-    r"scheda\s+madre|motherboard|mainboard|scheda\s+wi-?fi|halterung|l[uü]fter|"
+    r"scheda\s+madre|motherboard|mainboard|carte\s+m[eè]re|placa\s+(?:base|madre)|"
+    r"scheda\s+wi-?fi|halterung|l[uü]fter|"
     r"k[uü]hler|ventilateur|supporto\s+vesa|vesa\s+mount|bracket|caddy|"
     r"solo\s+case|case\s+vuoto)\b"
     r"|^\s*(?:alimentatore|caricatore|caricabatterie|adattatore|power\s+supply|"
@@ -1011,6 +1047,15 @@ def _is_target_system(text: str) -> tuple[bool, str | None]:
         (r"\b(?:Lenovo\s+)?ThinkCentre\s+M\d{3,4}\s+Tiny\b", "Lenovo ThinkCentre Tiny"),
         (r"\b(?:Lenovo\s+)?ThinkCentre\s+M700\b(?=[\s\S]{0,180}\b(?:USFF|Ultra\s+Small\s+Form\s+Factor|Tiny)\b)", "Lenovo ThinkCentre Tiny (M700 / USFF wording)"),
         (r"\b(?:Dell\s+)?OptiPlex\s+\d{4}\s+Micro(?:\s+Form\s+Factor)?\b", "Dell OptiPlex Micro"),
+        # Dell's own name for the 2024 model is "OptiPlex Micro 7020".
+        (r"\b(?:Dell\s+)?OptiPlex\s+Micro\s+\d{4}\b", "Dell OptiPlex Micro"),
+        # HP model numbers without the family word: in HP's business line,
+        # "400/600 Gx Mini" can only be a ProDesk and "800 Gx Mini" an EliteDesk.
+        (r"\bHP\s+[468]00\s+G\d\s+(?:Mini|DM|Desktop\s+Mini)\b", "HP ProDesk/EliteDesk Mini"),
+        # "Mini PC HP EliteDesk 705 G5": the form factor comes before the model.
+        # Requires the brand, family, model number and generation, so a generic
+        # "Mini PC HP ProDesk 600" without a generation is still not accepted.
+        (r"\bMini[\s-]?PC\s+(?:HP\s+)?(?:EliteDesk|ProDesk)\s+\d{3}\s+G\d\b", "HP EliteDesk/ProDesk Mini (Mini PC wording)"),
     ]
     for pattern, family in checks:
         if re.search(pattern, text, re.I):

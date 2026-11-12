@@ -583,5 +583,70 @@ class AmbiguousCpuTests(unittest.TestCase):
         self.assertEqual((result["cpu"], result["cpu_candidates"]), (None, []))
 
 
+class ListingRegressionTests(unittest.TestCase):
+    """Titles taken from real alerts that were misread or misfiltered."""
+
+    def test_ssd_size_before_a_ram_line_is_not_read_as_ram(self):
+        result = enricher.analyze_hardware(
+            "Unité centrale HP EliteDesk 705 G5 Desktop Mini Ryzen 3 Pro SSD 500GO",
+            "RAM : 8 Go", "100,00 €",
+        )
+        self.assertEqual(result["ram_gb"], 8)
+        self.assertEqual(enricher._find_ram_gb("SSD 500GO RAM"), None)
+
+    def test_ram_written_next_to_the_drive_type_is_not_a_drive(self):
+        self.assertEqual(
+            enricher._find_storage("Mini PC Lenovo ThinkCentre M720q i3 8Go SSD 256"),
+            ["256 GB SSD"],
+        )
+        self.assertEqual(enricher._find_ram_gb("Mini PC Lenovo ThinkCentre M720q i3 8Go SSD 256"), 8)
+
+    def test_ssd_m2_with_capacity_after_is_storage(self):
+        self.assertEqual(
+            enricher._find_storage("m720q – i5 8ª gen 6 core, 24gb ram, ssd m.2 256gb, Windows 11 pro"),
+            ["256 GB SSD M.2"],
+        )
+
+    def test_unitless_drive_size_ignores_other_numbers(self):
+        self.assertEqual(enricher._find_storage("SSD 256GB"), ["256 GB SSD"])
+        self.assertEqual(enricher._find_storage("SSD 2,5 pollici"), [])
+
+    def test_motherboard_in_french_or_spanish_is_not_a_system(self):
+        for title in ("Dell OptiPlex 7010 Micro carte mere", "Dell OptiPlex 7010 Micro carte mère",
+                      "Placa base Lenovo ThinkCentre M720q"):
+            with self.subTest(title=title):
+                self.assertTrue(enricher.is_non_system_title(title))
+                self.assertFalse(enricher.is_target_system(title)[0])
+
+    def test_model_word_order_variants_are_targets(self):
+        for title in ("Dell Optiplex Micro 7020 i5 16GB 256GB SSD", "Hp 400 G4 mini pc",
+                      "Mini PC HP Elitedesk 705 G5"):
+            with self.subTest(title=title):
+                self.assertTrue(enricher.is_target_system(title)[0])
+
+    def test_word_order_variants_stay_strict(self):
+        for title in ("MiniPC HP Prodesk 600 8gb RAM i5 HD500gb", "HP ProDesk 6500T",
+                      "ProDesk 600 G2 | i5 | 16Gb DDR4", "HP 260 G4 mini pc",
+                      "Dell OptiPlex 7010 i5-3470 SFF"):
+            with self.subTest(title=title):
+                self.assertFalse(enricher.is_target_system(title)[0])
+
+    def test_newer_dell_micro_profiles(self):
+        cases = {
+            "Dell OptiPlex 3000 Micro PC, i5-12500T, 8GB RAM": ("Dell OptiPlex 3000 Micro", 12),
+            "Dell OptiPlex 7010 Micro | i5-13500T | 16GB RAM": ("Dell OptiPlex 7010 Micro", 13),
+            "Dell Optiplex Micro 7020 i5 16GB": ("Dell OptiPlex Micro 7020", 14),
+        }
+        for title, expected in cases.items():
+            with self.subTest(title=title):
+                profile = enricher._find_platform_profile(title)
+                self.assertEqual((profile["name"], profile["generation"]), expected)
+                self.assertIsNone(profile["pcie_slot"])
+                self.assertIsNone(profile["max_ram_gb"])
+        # The 2012 OptiPlex 7010 and the 3000 Thin Client have no Micro profile.
+        self.assertIsNone(enricher._find_platform_profile("Dell OptiPlex 7010 SFF i5-3470"))
+        self.assertIsNone(enricher._find_platform_profile("Dell OptiPlex 3000 Thin Client"))
+
+
 if __name__ == "__main__":
     unittest.main()
