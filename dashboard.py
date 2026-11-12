@@ -24,6 +24,7 @@ import json
 import logging
 import sqlite3
 import statistics
+from datetime import datetime
 from functools import lru_cache
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -67,6 +68,56 @@ CARD_COLUMNS = (
     "build_estimate_eur, cpu_bench_mt(cpu) AS bench_mt, cpu_bench_st(cpu) AS bench_st"
 )
 MAX_LIMIT = 200
+# ?availability= filter values; "unchecked" means never read yet.
+AVAILABILITY_FILTERS = {
+    "for_sale": "availability IN ('active', 'reserved')",
+    "sold": "availability = 'sold'",
+    "gone": "availability IN ('sold', 'closed', 'removed')",
+    "unchecked": "availability IS NULL",
+}
+
+
+# Widest first-seen → gone window still precise enough for "days until gone".
+TIMING_WINDOW_DAYS = 1.5
+
+
+def card_columns(db: sqlite3.Connection) -> str:
+    """CARD_COLUMNS plus the availability columns, as NULL on a database the
+    scanner has not migrated yet (the dashboard never writes)."""
+    present = {row[1] for row in db.execute("PRAGMA table_info(listings)")}
+    extra = [column if column in present else f"NULL AS {column}" for column in storage.AVAILABILITY_COLUMNS]
+    return ", ".join([CARD_COLUMNS, *extra])
+
+
+def _parse_time(value):
+    try:
+        return datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ") if value else None
+    except (TypeError, ValueError):
+        return None
+
+
+def time_to_close(listing: dict) -> dict | None:
+    """Days from first sighting to sold/closed/removed, as a range.
+
+    ``max_days``: the first check that saw it gone; ``min_days``: the last check
+    that saw it for sale (0 when it was already gone at the first check).
+    ``days`` is the midpoint, given only when that window is at most
+    TIMING_WINDOW_DAYS wide, so listings first checked long after the alert
+    (for example old Telegram imports) do not skew medians.
+    """
+    if listing.get("availability") not in ("sold", "closed", "removed"):
+        return None
+    seen, closed = _parse_time(listing.get("first_seen")), _parse_time(listing.get("closed_at"))
+    if not seen or not closed:
+        return None
+    active = _parse_time(listing.get("last_active_at"))
+    max_days = max((closed - seen).total_seconds() / 86400, 0)
+    min_days = max((active - seen).total_seconds() / 86400, 0) if active else 0.0
+    min_days = min(min_days, max_days)  # out-of-order timestamps never give a negative window
+    return {
+        "min_days": round(min_days, 1), "max_days": round(max_days, 1),
+        "days": round((min_days + max_days) / 2, 1) if max_days - min_days <= TIMING_WINDOW_DAYS else None,
+    }
 
 
 @lru_cache(maxsize=512)
@@ -146,7 +197,7 @@ def overview(db: sqlite3.Connection) -> dict:
         modes[mode]["last_alert"] = row["last_alert"]
 
     market = [dict(row) for row in db.execute(
-        f"SELECT {CARD_COLUMNS} FROM listings WHERE mode = 'mini_pc' AND status IN ({alerts})",
+        f"SELECT {card_columns(db)} FROM listings WHERE mode = 'mini_pc' AND status IN ({alerts})",
         ALERT_STATUSES,
     )]
     runs = db.execute(
@@ -190,6 +241,7 @@ def market_stats(listings: list[dict]) -> dict:
                     _build_cost(i) / i["bench_mt"] * 1000
                     for i in items if i.get("bench_mt") and _build_cost(i) is not None
                 ),
+                **availability_stats(items),
             }
             for name, items in groups.items() if name is not None
         ]
@@ -205,6 +257,7 @@ def market_stats(listings: list[dict]) -> dict:
     benchmarked = [i for i in listings if i.get("bench_mt") and _build_cost(i)]
     return {
         "count": len(listings),
+        "availability": availability_stats(listings),
         "median_price": _median(i["price_eur"] for i in listings),
         "median_total_32": _median(i["total_32_eur"] for i in listings),
         "median_score": _median(i["score"] for i in listings),
@@ -218,6 +271,22 @@ def market_stats(listings: list[dict]) -> dict:
         "best_perf_value": sorted(benchmarked, key=lambda i: i["bench_mt"] / _build_cost(i), reverse=True)[:6],
         "value_frontier": value_frontier(listings),
         "benchmarked": len(benchmarked),
+    }
+
+
+def availability_stats(listings: list[dict]) -> dict:
+    """How many listings were checked, are still for sale or are gone, and how fast they went."""
+    states = [listing.get("availability") for listing in listings]
+    timings = [time_to_close(listing) for listing in listings]
+    timed = [timing["days"] for timing in timings if timing and timing["days"] is not None]
+    return {
+        "checked": sum(state is not None for state in states),
+        "for_sale": sum(state in ("active", "reserved") for state in states),
+        "sold": states.count("sold"),
+        "gone": sum(state in ("sold", "closed", "removed") for state in states),
+        # Only listings whose sale window is narrow enough; see time_to_close.
+        "timed": len(timed),
+        "median_days_to_close": _median(timed),
     }
 
 
@@ -268,6 +337,11 @@ def listings(db: sqlite3.Connection, params: dict[str, str]) -> dict:
         if _number(params.get(param)) is not None:
             where.append(f"{column} >= ?")
             args.append(float(params[param]))
+    if params.get("availability") in AVAILABILITY_FILTERS:
+        if "availability" in {row[1] for row in db.execute("PRAGMA table_info(listings)")}:
+            where.append(AVAILABILITY_FILTERS[params["availability"]])
+        elif params["availability"] != "unchecked":
+            where.append("0")  # nothing has been checked on an unmigrated database
     if _number(params.get("run_id"), int) is not None:
         where.append("run_id = ?")
         args.append(int(params["run_id"]))
@@ -277,10 +351,13 @@ def listings(db: sqlite3.Connection, params: dict[str, str]) -> dict:
     offset = max(_number(params.get("offset"), int) or 0, 0)
     total = db.execute(f"SELECT COUNT(*) FROM listings WHERE {clause}", args).fetchone()[0]
     rows = db.execute(
-        f"SELECT {CARD_COLUMNS} FROM listings WHERE {clause} ORDER BY {order}, item_id LIMIT ? OFFSET ?",
+        f"SELECT {card_columns(db)} FROM listings WHERE {clause} ORDER BY {order}, item_id LIMIT ? OFFSET ?",
         (*args, limit, offset),
     )
-    return {"total": total, "limit": limit, "offset": offset, "items": [dict(row) for row in rows]}
+    items = [dict(row) for row in rows]
+    for item in items:
+        item["time_to_close"] = time_to_close(item)
+    return {"total": total, "limit": limit, "offset": offset, "items": items}
 
 
 def listing_detail(db: sqlite3.Connection, mode: str, item_id: str) -> dict | None:
@@ -291,6 +368,7 @@ def listing_detail(db: sqlite3.Connection, mode: str, item_id: str) -> dict | No
     data["sections"] = json.loads(data["sections"]) if data["sections"] else []
     # False for scores from older rules (not yet recalculated by rescore.py).
     data["score_current"] = data.get("score_version") == hardware_enricher.SCORING_VERSION
+    data["time_to_close"] = time_to_close(data)
     benchmark = _benchmark(data.get("cpu"))
     data["bench_mt"], data["bench_st"] = benchmark.get("mt"), benchmark.get("st")
     data["vs_reference"] = hardware_enricher.compare_to_references(

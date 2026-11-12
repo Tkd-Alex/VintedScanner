@@ -16,6 +16,15 @@ const STATUS_LABEL = {
   notified: "Alert sent", dry_run: "Dry run", failed: "Not delivered",
   filtered: "Filtered out", ignored: "Not a candidate", legacy: "Imported ID",
 };
+// Availability read by the tracker (availability.py); "active" needs no tag.
+const AVAILABILITY_LABEL = {
+  active: "For sale", reserved: "Reserved", sold: "Sold", closed: "Closed", removed: "Removed",
+};
+const AVAILABILITY_FILTER = [
+  ["", "Availability"], ["for_sale", "Still for sale"], ["sold", "Sold"],
+  ["gone", "Sold, closed or removed"], ["unchecked", "Not checked yet"],
+];
+const GONE = ["sold", "closed", "removed"];
 const STATUS_FILTER = {
   mini_pc: [["alerts", "Alerts sent"], ["all", "Everything seen"], ["filtered", "Filtered out"], ["failed", "Not delivered"]],
   ram: [["alerts", "Alerts sent"], ["all", "Everything seen"], ["ignored", "Not a candidate"], ["failed", "Not delivered"]],
@@ -162,10 +171,12 @@ function metaLine(item) {
 function card(item) {
   const photo = safeUrl(item.image_url)
     ? `<img src="${safeUrl(item.image_url)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : "";
-  const status = ["notified", "dry_run"].includes(item.status) ? "" :
-    `<span class="status-tag">${esc(STATUS_LABEL[item.status] || item.status)}</span>`;
+  const tag = !["notified", "dry_run"].includes(item.status) ? STATUS_LABEL[item.status] || item.status
+    : item.availability && item.availability !== "active" ? AVAILABILITY_LABEL[item.availability] : "";
+  const status = tag ? `<span class="status-tag">${esc(tag)}</span>` : "";
+  const gone = GONE.includes(item.availability) ? " card--gone" : "";
   return `
-    <button class="card" type="button" data-open="${esc(item.mode)}/${esc(item.item_id)}">
+    <button class="card${gone}" type="button" data-open="${esc(item.mode)}/${esc(item.item_id)}">
       <div class="card__photo${photo ? "" : " no-photo"}">${photo}${badge(item)}${status}</div>
       <div class="card__price">${euro(item.price_eur)}</div>
       <div class="card__build">${esc(buildLine(item))}</div>
@@ -241,6 +252,19 @@ async function renderOverview(params) {
     ${shelf("Best score per euro", "Score per euro of the 16 GB build.", market.best_value, "#/mini_pc?sort=value")}
     ${shelf("Cheapest with 32 GB", "Lowest total once RAM is upgraded to 32 GB.", market.cheapest_32, "#/mini_pc?sort=price")}
     ${shelf("Highest score", "Best current specification for a Proxmox node.", market.top_score, "#/mini_pc?sort=score")}
+    ${market.availability?.checked ? `
+    <section class="block">
+      <div class="block__head">
+        <div>
+          <h2>How fast they sell</h2>
+          <p class="subtle">The scanner re-opens alerted listings about once a day. ${market.availability.gone} of
+            ${market.availability.checked} checked are gone (${market.availability.sold} marked sold by Vinted; “closed” and “removed”
+            give no reason). Median days count only listings whose sale is known to within 1.5 days
+            (number in brackets); older alerts found already gone are left out.</p>
+        </div>
+      </div>
+      ${sellTable(market.by_platform)}
+    </section>` : ""}
     <section class="block">
       <div class="block__head"><h2>By CPU generation</h2></div>
       ${generationTable(market.by_generation)}
@@ -433,7 +457,7 @@ async function renderCatalog(mode, params) {
     <form class="filters" id="filters">
       ${select("status", "Listings shown", STATUS_FILTER[mode])}
       ${FACET_FILTERS[mode].map(([name, label]) => select(name, label, facetOptions(name, label))).join("")}
-      ${mode === "mini_pc" ? hardwareFilters(select) : ""}
+      ${mode === "mini_pc" ? hardwareFilters(select) + select("availability", "Availability", AVAILABILITY_FILTER) : ""}
       <input name="min_price" type="number" min="0" inputmode="decimal" placeholder="From €" value="${esc(params.min_price)}" aria-label="Minimum price">
       <input name="max_price" type="number" min="0" inputmode="decimal" placeholder="To €" value="${esc(params.max_price)}" aria-label="Maximum price">
       ${params.run_id ? `<button class="pill" type="button" aria-pressed="true" data-drop="run_id">One run only ✕</button>` : ""}
@@ -581,6 +605,7 @@ function detail(item) {
     ["16 GB and CPU upgrade", item.total_16_cpu_eur != null && euro(item.total_16_cpu_eur)],
     ["32 GB and CPU upgrade", item.total_32_cpu_eur != null && euro(item.total_32_cpu_eur)],
     ["Build estimate", item.build_estimate_eur != null && euro(item.build_estimate_eur)],
+    ["Availability", availabilityText(item)],
     ["Found by search", item.matched_query],
     ["Status", STATUS_LABEL[item.status] || item.status],
     ["Alert sent", item.notified_at && when(item.notified_at)],
@@ -600,6 +625,43 @@ function detail(item) {
     </div>
     <table class="facts"><tbody>${facts.map(([label, value]) => `<tr><th>${label}</th><td>${esc(value)}</td></tr>`).join("")}</tbody></table>
     ${(item.sections || []).map(section).join("")}`;
+}
+
+function days(value) {
+  return value < 1 ? `${Math.round(value * 24)} h` : `${value.toFixed(1)} days`;
+}
+
+function availabilityText(item) {
+  if (item.mode !== "mini_pc") return null;
+  if (!item.availability) return item.availability_checked_at
+    ? `Page not readable (checked ${when(item.availability_checked_at)})` : "Not checked yet";
+  let text = AVAILABILITY_LABEL[item.availability] || item.availability;
+  if (item.availability_label && item.availability_label !== text) text += ` (“${item.availability_label}”)`;
+  const t = item.time_to_close;
+  if (t) {
+    text += t.days != null
+      ? ` between ${days(t.min_days)} and ${days(t.max_days)} after it was first seen`
+      : ` within ${days(t.max_days)} (already gone at the first check)`;
+  }
+  if (item.availability === "closed") text += " · reason not shown by Vinted";
+  return `${text} · checked ${when(item.availability_checked_at)}`;
+}
+
+function sellTable(rows) {
+  const tracked = rows.filter((row) => row.checked)
+    .sort((a, b) => (b.gone - a.gone) || (b.checked - a.checked)).slice(0, 20);
+  if (!tracked.length) return `<p class="empty">No alerted listing has been re-checked yet.</p>`;
+  return `
+    <div class="table-wrap"><table>
+      <thead><tr><th>Platform</th><th class="num">Checked</th><th class="num">Still for sale</th><th class="num">Sold</th>
+        <th class="num">Gone</th><th class="num">Median days until gone</th></tr></thead>
+      <tbody>${tracked.map((row) => `
+        <tr><td><a class="link" href="#/mini_pc?platform=${encodeURIComponent(row.name)}&availability=gone">${esc(row.name)}</a></td>
+          <td class="num">${row.checked}</td><td class="num">${row.for_sale}</td><td class="num">${row.sold}</td>
+          <td class="num">${row.gone}</td>
+          <td class="num">${row.median_days_to_close != null ? `${row.median_days_to_close.toFixed(1)} <span class="subtle">(${row.timed})</span>` : "–"}</td></tr>`).join("")}
+      </tbody>
+    </table></div>`;
 }
 
 function section({ title, rows }) {
