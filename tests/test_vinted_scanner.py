@@ -544,6 +544,81 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class AvailabilityCheckTests(TempStoreMixin, unittest.TestCase):
+    def setUp(self):
+        super().setUp()
+        self.report = scanner.report_module.RunReport(clock=lambda: 0.0)
+        for target, value in ((scanner, "run_report"),):
+            patcher = patch.object(target, value, self.report)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        for patcher in (patch.object(scanner, "wait_before_detail_fetch"),
+                        patch.object(scanner.Config, "vinted_url", "https://www.vinted.it", create=True)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        scanner._detail_fetch_state["paused"] = False
+        scanner._catalog_state["paused"] = False
+        self.addCleanup(scanner._detail_fetch_state.update, paused=False)
+        self.addCleanup(scanner._catalog_state.update, paused=False)
+        now = scanner.datetime.now(scanner.timezone.utc)
+        for item_id in ("1", "2", "3"):
+            seen_at = scanner._utc_iso(now - scanner.timedelta(hours=10 - int(item_id)))
+            self.store.record_listing("mini_pc", item_id, "notified", seen_at=seen_at, title=f"M720q #{item_id}",
+                                      url=f"https://www.vinted.it/items/{item_id}")
+
+    def run_checks(self, statuses, dry_run=False):
+        with patch.object(scanner.availability, "check_listing", side_effect=statuses) as check:
+            scanner.process_availability_checks(Mock(), dry_run)
+        return check
+
+    def test_states_are_recorded_and_summarized(self):
+        statuses = [scanner.availability.ListingStatus("sold", "Venduto"),
+                    scanner.availability.ListingStatus("active"),
+                    scanner.availability.ListingStatus(None)]
+        self.run_checks(statuses)
+        self.assertEqual(self.listing(3)["availability"], "sold")  # newest first: id 3 checked first
+        self.assertEqual(self.listing(2)["availability"], "active")
+        self.assertIsNone(self.listing(1)["availability"])
+        self.assertIsNotNone(self.listing(1)["availability_checked_at"])
+        text = "\n".join(self.report.build_lines())
+        self.assertIn("• Availability: 3 checked · 1 sold, 1 unreadable", text)
+
+    def test_rate_limit_stops_checks_and_pauses_listing_pages(self):
+        check = self.run_checks([scanner.availability.AvailabilityRateLimited("u")])
+        self.assertEqual(check.call_count, 1)
+        self.assertTrue(scanner._detail_fetch_state["paused"])
+        self.assertIn("rate_limit", self.report.issues)
+        self.assertIn("stopped by rate limit", "\n".join(self.report.build_lines()))
+
+    def test_request_error_is_reported_and_the_rest_continue(self):
+        error = requests.exceptions.HTTPError(response=Mock(status_code=503))
+        check = self.run_checks([error, scanner.availability.ListingStatus("active"),
+                                 scanner.availability.ListingStatus("active")])
+        self.assertEqual(check.call_count, 3)
+        self.assertEqual(self.report.availability.errors, 1)
+        self.assertIn("HTTP 503", self.report.issues["listing_page"][0])
+
+    def test_skipped_on_dry_run_when_disabled_or_already_rate_limited(self):
+        check = self.run_checks([], dry_run=True)
+        self.assertEqual(check.call_count, 0)
+        with patch.object(scanner.Config, "availability_check_enabled", False, create=True):
+            self.assertEqual(self.run_checks([]).call_count, 0)
+        scanner._catalog_state["paused"] = True
+        self.assertEqual(self.run_checks([]).call_count, 0)
+        self.assertTrue(self.report.availability.skipped)
+        self.assertIn("not checked", "\n".join(self.report.build_lines()))
+
+    def test_batch_size_comes_from_config(self):
+        with patch.object(scanner.Config, "availability_checks_per_run", 1, create=True):
+            check = self.run_checks([scanner.availability.ListingStatus("active")])
+        self.assertEqual(check.call_count, 1)
+
+    def test_invalid_settings_fall_back_to_defaults(self):
+        with patch.object(scanner.Config, "availability_checks_per_run", "many", create=True):
+            self.assertEqual(scanner.load_availability_configuration()[0],
+                             scanner.DEFAULT_AVAILABILITY_CHECKS_PER_RUN)
+
+
 class RamHuntTests(TempStoreMixin, unittest.TestCase):
     def test_ram_hunt_loads_default_queries_with_price_cap(self):
         with patch.object(scanner.Config, "ram_hunt_enabled", True), patch.object(
