@@ -574,7 +574,8 @@ function detail(item) {
     ["RAM", item.ram_gb && `${item.ram_gb} GB`],
     ["Disk", item.storage],
     ["GPU", item.gpu],
-    ["Score", item.score != null && `${item.score}/100${item.upgrade_score != null ? `, ${item.upgrade_score}/100 after upgrade` : ""}`],
+    ["Score", item.score != null && `${item.score}/100${item.upgrade_score != null ? `, ${item.upgrade_score}/100 after upgrade` : ""}`
+      + (item.mode === "mini_pc" && !item.score_current ? " (older scoring rules, not recalculated)" : "")],
     ["With 16 GB", item.total_16_eur != null && euro(item.total_16_eur)],
     ["With 32 GB", item.total_32_eur != null && euro(item.total_32_eur)],
     ["16 GB and CPU upgrade", item.total_16_cpu_eur != null && euro(item.total_16_cpu_eur)],

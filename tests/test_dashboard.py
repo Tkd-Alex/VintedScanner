@@ -72,6 +72,7 @@ class QueryTests(unittest.TestCase):
     def test_detail_runs_and_facets(self):
         detail = dashboard.listing_detail(self.db, "mini_pc", "2")
         self.assertEqual(detail["sections"][0]["rows"], ["RAM: 8 GB"])
+        self.assertFalse(detail["score_current"])  # fixture rows have no score_version
         self.assertIsNone(dashboard.listing_detail(self.db, "mini_pc", "404"))
         [run] = dashboard.runs(self.db, {})["items"]
         self.assertEqual((run["alerts"], run["modes"]["mini_pc"]["searches"]), (3, 12))

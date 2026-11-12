@@ -289,6 +289,8 @@ def listing_detail(db: sqlite3.Connection, mode: str, item_id: str) -> dict | No
         return None
     data = dict(row)
     data["sections"] = json.loads(data["sections"]) if data["sections"] else []
+    # False for scores from older rules (not yet recalculated by rescore.py).
+    data["score_current"] = data.get("score_version") == hardware_enricher.SCORING_VERSION
     benchmark = _benchmark(data.get("cpu"))
     data["bench_mt"], data["bench_st"] = benchmark.get("mt"), benchmark.get("st")
     data["vs_reference"] = hardware_enricher.compare_to_references(
