@@ -646,3 +646,17 @@ The 105 mini-PC alerts and the recently filtered listings on the deployed dashbo
 Found but not changed: scores stored before Phase 10 are not recomputed, and the database does not record which scoring version produced a score, so the dashboard mixes old and new scores; `build_estimate_eur` is empty for every alert and `upgrade_score` is set on only 3, because the only configured CPU upgrade cost is the i7-6700T; an estimated CPU gets an "upgrade to be verified" verdict even when the title says "6 core"; relisted items get a new ID and are alerted again.
 
 Verification: unit tests pass; the fixed titles were re-run through `analyze_hardware`. Not verified: a live Vinted run or a rescan of the user's database.
+
+## 18. Phase 12 — Score versions and rescoring stored listings (12 November 2026)
+
+The dashboard mixed scores from different rule sets: the 81 alerts restored from Telegram (up to 9 November) were scored with the old CPU tier table, the scanner alerts from 10 November with PassMark benchmarks.
+
+- `hardware_enricher.SCORING_VERSION` ("1") is stored per mini-PC listing as `score_version` (schema version 2; `Store` adds the column to older databases on open). Bump it whenever parsing or scoring changes what an alert says.
+- `rescore.py` recalculates alerted mini-PC rows (`notified`, `dry_run`, `failed`) through the real alert path (`enrich_item` → `build_telegram_*` → `alert_plain_text` → `parse_alert`), and writes only `storage.ANALYSIS_FIELDS` with `Store.replace_analysis`, which, unlike `record_listing`, also clears values that are now unknown. It backs the database up with SQLite's backup API first; `--dry-run` writes nothing.
+- Telegram-imported rows only have the ~520-character alert excerpt. A first dry run lost CPU, RAM and disk on many of them, so the identified `CPU:`/`RAM:`/`Disk:` rows of the stored alert (not the `❓` unknowns) are appended to the analysed text. Their old misreadings are carried over too.
+- The dry run also showed that the Phase 11 "SSD M.2 256gb" reading could count one drive twice; storage readings with the same capacity and drive type are now deduplicated.
+- The dashboard detail panel marks scores from older rules.
+
+Result on a copy of the production database (105 mini-PC alerts): 80 changed, 25 unchanged, 0 errors. Most restored alerts lose about 10 points (benchmark CPU scoring; e.g. i7-8700T 31 → 21 of 40); the OptiPlex 7010 Micro i5-13500T goes from 38 to 79 and the OptiPlex 3000 Micro i5-12500T to 73, now the top two. Statuses and counts were unchanged and a second run had nothing to do.
+
+Verification: unit tests (migration, `replace_analysis`, rescore dry run/real run/backup/idempotence, scanner writes `score_version`, dashboard flag); dry and real runs on a copy of the production database. Not done: running it on the production database.

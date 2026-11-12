@@ -363,6 +363,32 @@ message, become runs. Messages in the older alert format are skipped and
 counted. The import can be repeated safely: nothing is duplicated. Keep the
 export out of Git; it contains your chat history.
 
+### Recalculating scores after a rule change
+
+Scores are stored when an alert is sent, so after an update that changes
+parsing or scoring the dashboard would mix old and new scores. Each mini-PC
+listing records the scoring version that produced it (`score_version`), and
+the dashboard marks older scores in the listing details. To bring them up to
+date:
+
+```bash
+python3 rescore.py --dry-run   # list every change, write nothing
+python3 rescore.py             # back up vinted_scanner.db, then update it
+```
+
+Alerted mini-PC listings (`notified`, `dry_run`, `failed`) are analysed again
+from their stored title, price and description, through the same code that
+builds a new alert. Only the analysis columns change (score, verdict, CPU, RAM,
+disk, platform, costs, alert sections); status, dates, title, price, links and
+the description are kept, and nothing is sent. The backup is written next to
+the database as `vinted_scanner.db.bak-<UTC time>`. A second run does nothing
+until the scoring version changes again; `--all` recalculates every listing.
+
+Listings restored from Telegram only have the description excerpt shown in the
+alert, so the CPU, RAM and disk lines that the old alert had identified are
+reused; anything the old alert got wrong there is kept. Messages already sent
+on Telegram are not changed.
+
 ### Dashboard
 
 ```bash

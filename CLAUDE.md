@@ -20,6 +20,7 @@ python3 -m unittest tests.test_vinted_scanner.ConfigurationTests.test_build_cata
 python3 vinted_scanner.py --dry-run                # no notifications, but DOES record IDs (see below)
 python3 telegram_import.py telegram-export.json [--dry-run]   # restore history into vinted_scanner.db
 python3 dashboard.py [--port 8000] [--db vinted_scanner.db]       # http://127.0.0.1:8000
+python3 rescore.py [--dry-run] [--all] [--db vinted_scanner.db]   # recalculate stored mini-PC analyses (backs up first)
 # Deployment: scanner via host crontab (Proxmox LXC, /root/VintedScanner, venv); dashboard via deploy/vinted-dashboard.service on 0.0.0.0:8000
 python3 vinted_query_builder.py [--refresh-cache | categories <q> | brands <q> --category <id> | filters --category <id> --options]
 ```
@@ -40,7 +41,7 @@ No linter or formatter is configured. Tests use `unittest` + `unittest.mock`; co
 
 ### State files (all next to the script, gitignored)
 
-All state lives in `vinted_scanner.db` (SQLite, `storage.Store`). `listings` has one row per (mode, item_id) with a status (`notified`, `dry_run`, `failed`, `filtered`, `ignored`, `legacy`) plus the alert parsed into columns and `sections` JSON; `runs`/`run_modes`/`run_issues` mirror `RunReport`. `Store.seen_ids()` defines dedup: `failed` is retried, `filtered` is skipped only while its `filter_version` equals `hardware_enricher.FILTER_RULES_VERSION` — **bump that version whenever filter rules change** so previously filtered IDs are reconsidered. A notified row is never downgraded. The old `.txt` ledgers are imported once (`migrate_legacy_ledgers`) and left on disk; `telegram-export.json` and the DB are gitignored and must never be committed. Logs: `vinted_scanner.log` (rotating).
+All state lives in `vinted_scanner.db` (SQLite, `storage.Store`). `listings` has one row per (mode, item_id) with a status (`notified`, `dry_run`, `failed`, `filtered`, `ignored`, `legacy`) plus the alert parsed into columns and `sections` JSON; `runs`/`run_modes`/`run_issues` mirror `RunReport`. `Store.seen_ids()` defines dedup: `failed` is retried, `filtered` is skipped only while its `filter_version` equals `hardware_enricher.FILTER_RULES_VERSION` — **bump that version whenever filter rules change** so previously filtered IDs are reconsidered. Likewise bump `hardware_enricher.SCORING_VERSION` whenever parsing or scoring changes what an alert says; each mini-PC row stores it as `score_version` and `rescore.py` recalculates rows with an older one. A notified row is never downgraded. The old `.txt` ledgers are imported once (`migrate_legacy_ledgers`) and left on disk; `telegram-export.json` and the DB are gitignored and must never be committed. Logs: `vinted_scanner.log` (rotating).
 
 ### Dedup/notify semantics
 
