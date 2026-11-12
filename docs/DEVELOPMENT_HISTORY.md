@@ -632,3 +632,17 @@ A friend's "CPU Intelligence & Best-Deal" proposal was reviewed against the code
 Not changed: chassis filter (`FILTER_RULES_VERSION` stays "2"), notification eligibility, deduplication, storage schema. Note that the HP **Elite Mini 800 G9** is branded without "EliteDesk", so the chassis filter does not accept it yet; adding it is a filter change needing approval.
 
 Verification: unit tests pass; alerts were rendered offline from synthetic titles; the dashboard was checked in headless Chrome at desktop and phone width on a synthetic database built through the real enricher/parser/store path. Not verified: a live Vinted run or the user's real database.
+
+## 17. Phase 11 — Parser and filter fixes from the dashboard review (12 November 2026)
+
+The 105 mini-PC alerts and the recently filtered listings on the deployed dashboard were reviewed. The fixes below each come with a regression test built from the real listing title (`ListingRegressionTests`):
+
+- **RAM misread as storage size.** The title "... SSD 500GO" followed by the description "RAM : 8 Go" was read as 500 GB of RAM (full RAM points, no RAM upgrade cost). Explicit RAM patterns now stay on one line and accept only plausible RAM sizes.
+- **RAM read as a drive.** "i3 8Go SSD 256" produced an "8 GB SSD" and lost the RAM value. Drive readings under 16 GB are ignored in both the storage and the RAM parser; "SSD 256" without a unit is read for common drive sizes only, and "ssd m.2 256gb" is now read as storage.
+- **Motherboard alerted as a system.** "Dell OptiPlex 7010 Micro carte mere" passed; "carte mère" and "placa base/madre" are now component words.
+- **Newer Dell Micros had no profile.** OptiPlex 3000/5000/7000 Micro, 7010 Micro and Micro 7020 were scored with 2/15 platform points, so a €325 i5-13500T scored below 6th-gen quad-cores. They now have name/generation profiles; all other fields stay unknown because no Dell reference was read (as noted in Phase 10).
+- **Chassis filter word order (approved by the user).** Three filtered listings were real targets: "Dell Optiplex Micro 7020", "Hp 400 G4 mini pc" and "Mini PC HP Elitedesk 705 G5". Accepted variants are listed in `HARDWARE_ENRICHMENT.md`; titles without a generation ("MiniPC HP Prodesk 600"), "HP 260 G4 mini", and SFF desktops stay rejected. `FILTER_RULES_VERSION` is now "3", so previously filtered listings are reconsidered on the next run.
+
+Found but not changed: scores stored before Phase 10 are not recomputed, and the database does not record which scoring version produced a score, so the dashboard mixes old and new scores; `build_estimate_eur` is empty for every alert and `upgrade_score` is set on only 3, because the only configured CPU upgrade cost is the i7-6700T; an estimated CPU gets an "upgrade to be verified" verdict even when the title says "6 core"; relisted items get a new ID and are alerted again.
+
+Verification: unit tests pass; the fixed titles were re-run through `analyze_hardware`. Not verified: a live Vinted run or a rescan of the user's database.
