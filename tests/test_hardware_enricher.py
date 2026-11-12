@@ -607,6 +607,12 @@ class ListingRegressionTests(unittest.TestCase):
             ["256 GB SSD M.2"],
         )
 
+    def test_m2_wording_of_the_same_drive_counts_once(self):
+        self.assertEqual(
+            enricher._find_storage("512GB NVMe + 240GB SSD. Disco: NVMe M.2 512GB"),
+            ["512 GB NVME", "240 GB SSD"],
+        )
+
     def test_unitless_drive_size_ignores_other_numbers(self):
         self.assertEqual(enricher._find_storage("SSD 256GB"), ["256 GB SSD"])
         self.assertEqual(enricher._find_storage("SSD 2,5 pollici"), [])

@@ -891,10 +891,14 @@ def _find_storage(text: str) -> list[str]:
     )
     for match in pattern_c.finditer(text):
         found.append((match.start(), f"{match.group(2)} GB {match.group(1).upper()}"))
-    # Remove duplicate readings of the same span/value.
+    # Remove duplicate readings of the same drive: same capacity and drive type,
+    # so "512GB NVMe" and "NVMe M.2 512GB" in one listing count once.
     result: list[str] = []
+    keys: set[tuple[str, ...]] = set()
     for _, value in sorted(found):
-        if value not in result:
+        key = tuple(value.split()[:3])
+        if key not in keys:
+            keys.add(key)
             result.append(value)
     return result[:4]
 
