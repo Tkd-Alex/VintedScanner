@@ -9,8 +9,9 @@ With this script, you no longer need to manually open the Vinted app and search 
 ## Features
 
 - **Automated Search**: The script performs searches on Vinted according to your custom queries.
+- **Parts Hunt mode**: Enabled by default; finds loose DDR4 SO-DIMM modules and SSDs for a Dell OptiPlex 7090 Micro under per-part price caps, with an "ask for a discount" band just above each cap.
 - **Optional CPU Hunt mode**: Disabled by default; finds loose low-power CPUs (e.g. i7-8700T, i5-9500T) under a per-model price cap and lists the mini PCs they fit, tracked separately from the mini-PC alerts.
-- **Separate RAM Hunt mode**: Enabled by default; finds under-€100 damaged laptops and listings mentioning 16/32 GB DDR4, for possible memory recovery. It is tracked separately and does not replace or filter the normal mini-PC notifications.
+- **Separate RAM Hunt mode**: Enabled by default; finds under-€100 damaged laptops and listings mentioning 16/32 GB DDR4, for possible memory recovery, plus laptops stating a 1 TB+ SSD (SSD donors). It is tracked separately and does not replace or filter the normal mini-PC notifications.
 - **Automatic Notifications**: Receive notifications through:
   - **Email**
   - **Slack**
@@ -329,7 +330,7 @@ delete them yourself afterwards.
 
 The database holds:
 
-- **listings**: one row per listing and mode (mini PC, RAM Hunt, CPU Hunt) with
+- **listings**: one row per listing and mode (mini PC, RAM Hunt, CPU Hunt, Parts Hunt) with
   its outcome: `notified`, `dry_run`, `failed` (alert not delivered, retried
   on the next run), `filtered` (outside the target chassis, re-checked after a
   filter-rule change) or `ignored` (not a RAM/CPU Hunt candidate). Alerted
@@ -542,6 +543,65 @@ When updating an existing installation, merge the RAM Hunt settings from
 `Config.sample.py` into the existing `Config.py` rather than replacing credentials.
 If those settings are absent, the code uses the built-in defaults; set
 `ram_hunt_enabled = False` explicitly to turn the feature off.
+
+### SSD donors
+
+RAM Hunt also flags a laptop within the price cap that states a useful SSD
+(`ram_hunt_ssd_donors = True`, the default): 1 TB or more, or a 500/512 GB NVMe
+when the whole laptop costs no more than `parts_hunt_caps["nvme_500"]`. Such a
+laptop is alerted even when its RAM would not qualify (8 GB, DDR3), with the tier
+`SSD DONOR — 1 TB SSD stated`; when a RAM tier already applies, the alert gains an
+`SSD in listing` row. With `ram_hunt_add_ssd_queries = True` (the default) the
+searches `portatile ssd 1tb`, `notebook ssd 1tb` and `portatile guasto ssd` are
+added to `ram_hunt_queries` (skipping any already there). Laptops stored as "not a
+candidate" before this change are not reconsidered.
+
+## Parts Hunt mode
+
+Parts Hunt looks for loose parts for a Dell OptiPlex 7090 Micro: DDR4 SO-DIMM
+modules and SSDs. It is independent of the other modes, keeps its own list of
+analyzed listings and judges a listing from its **title and price only** (the
+catalogue gives no description and no form-factor filter). It is enabled by default;
+turn it off with `parts_hunt_enabled = False`.
+
+```python
+parts_hunt_caps = {
+    "ram_8": 30, "ram_16": 50, "ram_2x16": 80,           # DDR4 SO-DIMM
+    "nvme_500": 40, "nvme_1tb": 110, "nvme_2tb": 190,    # M.2 NVMe (2280 or 2230)
+    "sata_1tb": 85, "sata_2tb": 150,                     # 2.5" SATA
+}
+parts_hunt_discount_margin = 0.10
+```
+
+Caps are on the item price (shipping and buyer-protection fee excluded). A listing
+at or under its cap is alerted as `TARGET`; one up to `parts_hunt_discount_margin`
+above it as `ASK DISCOUNT` with the percentage over the cap. A wanted part priced
+higher is skipped **without being stored**, so it is reconsidered on the next run if
+the seller lowers the price.
+
+The built-in searches use the RAM (`3603`) and internal storage (`3607`) categories,
+newest first, 48 results, excluding the condition "Non del tutto funzionante", plus a
+`sodimm ddr4` text search for misfiled parts; set `parts_hunt_queries` to replace them.
+
+What is accepted, following Dell's 7090 Micro specifications (two DDR4 SO-DIMM
+slots; M.2 slot SSD-0 takes 2230 or 2280 NVMe, SSD-1 2280 NVMe, up to 2 TB, Gen4
+drives at Gen3 speed; one 2.5" SATA bay, absent on discrete-graphics units):
+
+- RAM: DDR4 SO-DIMM 1×8 GB, 1×16 GB, 2×16 GB, or 32 GB in total. DDR4 is read from
+  `DDR4`/`PC4` or a 2400–3200 MHz speed; a 16/32 GB SO-DIMM without a generation is
+  accepted with a note. "16 GB" without a layout is accepted with "one module or
+  2×8?". Rejected: desktop DIMMs (UDIMM, 288-pin, gaming lines such as Vengeance LPX,
+  Fury Beast), ECC/registered/server memory, DDR2/DDR3/DDR5, 4 GB modules, 2×8 GB and
+  2×32 GB kits, lots of three or more, and whole laptops.
+- SSD: M.2 NVMe 500 GB (only at the very low `nvme_500` cap), 1 TB, 2 TB; 2.5" SATA
+  1 TB and 2 TB. An M.2 drive without a stated interface is accepted with "check it is
+  NVMe"; a drive with no interface at all is priced against the SATA cap. Rejected: M.2
+  SATA, mSATA, U.2, 2242/22110, external/USB/portable drives, enclosures and adapters,
+  Apple and Xbox drives, hard disks, multi-drive sets and whole PCs.
+
+Titles are matched in Italian, French, Spanish, German, Dutch and English
+("8 Go", "1 To", "barrette", "portátil", "Arbeitsspeicher"). Notes in the alert flag
+what the title leaves open; the "Before buying" checklist covers the rest.
 
 ## CPU Hunt mode
 
