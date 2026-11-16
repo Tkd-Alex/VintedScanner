@@ -566,7 +566,7 @@ turn it off with `parts_hunt_enabled = False`.
 
 ```python
 parts_hunt_caps = {
-    "ram_8": 30, "ram_16": 50, "ram_2x16": 80,           # DDR4 SO-DIMM
+    "ram_8": 30, "ram_16": 50, "ram_2x8": 60, "ram_2x16": 80,   # DDR4 SO-DIMM
     "nvme_500": 40, "nvme_1tb": 110, "nvme_2tb": 190,    # M.2 NVMe (2280 or 2230)
     "sata_1tb": 85, "sata_2tb": 150,                     # 2.5" SATA
 }
@@ -587,12 +587,12 @@ What is accepted, following Dell's 7090 Micro specifications (two DDR4 SO-DIMM
 slots; M.2 slot SSD-0 takes 2230 or 2280 NVMe, SSD-1 2280 NVMe, up to 2 TB, Gen4
 drives at Gen3 speed; one 2.5" SATA bay, absent on discrete-graphics units):
 
-- RAM: DDR4 SO-DIMM 1×8 GB, 1×16 GB, 2×16 GB, or 32 GB in total. DDR4 is read from
+- RAM: DDR4 SO-DIMM 1×8 GB, 1×16 GB, 2×8 GB, 2×16 GB, or 32 GB in total. DDR4 is read from
   `DDR4`/`PC4` or a 2400–3200 MHz speed; a 16/32 GB SO-DIMM without a generation is
   accepted with a note. "16 GB" without a layout is accepted with "one module or
   2×8?". Rejected: desktop DIMMs (UDIMM, 288-pin, gaming lines such as Vengeance LPX,
-  Fury Beast), ECC/registered/server memory, DDR2/DDR3/DDR5, 4 GB modules, 2×8 GB and
-  2×32 GB kits, lots of three or more, and whole laptops.
+  Fury Beast), ECC/registered/server memory, DDR2/DDR3/DDR5, 4 GB modules, 2×32 GB
+  kits, lots of three or more, and whole laptops.
 - SSD: M.2 NVMe 500 GB (only at the very low `nvme_500` cap), 1 TB, 2 TB; 2.5" SATA
   1 TB and 2 TB. An M.2 drive without a stated interface is accepted with "check it is
   NVMe"; a drive with no interface at all is priced against the SATA cap. Rejected: M.2

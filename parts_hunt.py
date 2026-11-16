@@ -23,6 +23,7 @@ from decimal import Decimal
 DEFAULT_CAPS = {
     "ram_8": 30,       # one 8 GB DDR4 SO-DIMM
     "ram_16": 50,      # one 16 GB DDR4 SO-DIMM
+    "ram_2x8": 60,     # 2x8 GB kit (two 8 GB modules)
     "ram_2x16": 80,    # 2x16 GB kit (or 32 GB in total)
     "nvme_500": 40,    # 500/512 GB NVMe, only when really cheap
     "nvme_1tb": 110,
@@ -32,11 +33,11 @@ DEFAULT_CAPS = {
 }
 DEFAULT_DISCOUNT_MARGIN = Decimal("0.10")
 CAP_LABELS = {
-    "ram_8": "1×8 GB", "ram_16": "1×16 GB", "ram_2x16": "2×16 GB",
+    "ram_8": "1×8 GB", "ram_16": "1×16 GB", "ram_2x8": "2×8 GB", "ram_2x16": "2×16 GB",
     "nvme_500": "NVMe 500 GB", "nvme_1tb": "NVMe 1 TB", "nvme_2tb": "NVMe 2 TB",
     "sata_1tb": "SATA 1 TB", "sata_2tb": "SATA 2 TB",
 }
-RAM_CAP_KEYS = ("ram_8", "ram_16", "ram_2x16")
+RAM_CAP_KEYS = ("ram_8", "ram_16", "ram_2x8", "ram_2x16")
 SSD_CAP_KEYS = ("nvme_500", "nvme_1tb", "nvme_2tb", "sata_1tb", "sata_2tb")
 
 _I = re.IGNORECASE
@@ -225,6 +226,8 @@ def classify_ram(title: str, description: str = "") -> dict | None:
         key = {8: "ram_8", 16: "ram_16", 32: "ram_2x16"}[size]
         part = f"DDR4 SO-DIMM {size} GB (1×{size} GB)"
         total = size
+    elif count == 2 and size == 8:
+        key, part, total = "ram_2x8", "DDR4 SO-DIMM 16 GB (2×8 GB)", 16
     elif count == 2 and size == 16:
         key, part, total = "ram_2x16", "DDR4 SO-DIMM 32 GB (2×16 GB)", 32
     else:

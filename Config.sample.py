@@ -154,6 +154,7 @@ parts_hunt_enabled = True
 parts_hunt_caps = {
     "ram_8": 30,       # one 8 GB DDR4 SO-DIMM
     "ram_16": 50,      # one 16 GB DDR4 SO-DIMM
+    "ram_2x8": 60,     # 2x8 GB kit
     "ram_2x16": 80,    # 2x16 GB kit (or 32 GB in total)
     "nvme_500": 40,    # 500/512 GB M.2 NVMe, only when really cheap
     "nvme_1tb": 110,   # 1 TB M.2 NVMe (2280, or 2230)

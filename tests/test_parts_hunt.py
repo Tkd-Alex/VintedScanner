@@ -24,6 +24,10 @@ class RamTests(unittest.TestCase):
     def test_wanted_modules(self):
         self.assertPart("16Gb 1x16GB Samsung Sodimm DDR4 2666MHz", 50, "ram_16")
         self.assertPart("Mémoire ram 32gb (16*2) 2400 pc4 SODIMM ddr4", 80, "ram_2x16")
+        self.assertPart("Kit RAM 16 Go (2x8 Go) DDR4 2666 MHz Sodimm Kingston PC portable", 55, "ram_2x8")
+        self.assertPart("Ram Sodimm 8GB+8GB DDR4 2400MHz SK hynix Compatibile laptop", 65, "ram_2x8", band="discount")
+        self.assertPart("2 x 8GB 2666Mhz DDR4 Sodimm RAM", 50, "ram_2x8")
+        self.assertPart("Kit 16GB RAM ddr4 Notebook 2400MHz sodimm", 60, "ram_2x8", note="total of two modules")
         self.assertPart("Ram Sodimm Ddr4 Gowe 2x16gb 2666mhz", 80, "ram_2x16")
         self.assertPart("1x SODIMM ddr4 pc4 RAM Kingston 1x8GB(ram13)", 25, "ram_8")
         self.assertPart("RAM SK hynix 8 Go DDR4 2400 MHz so-dimm PC4-2400T PC Portable", 22, "ram_8")
@@ -42,8 +46,7 @@ class RamTests(unittest.TestCase):
             "Ram SQP 8GB Sodimm 1333 MHz",               # DDR3 speed, no generation
             "RAM 4 Go DDR4 SO-DIMM 2400 MHz Ramaxel – PC portable",
             "Sodimm DDR4 2x4Gb 2400mhz",
-            "Kit RAM 16 Go (2x8 Go) DDR4 2666 MHz Sodimm Kingston PC portable",
-            "Ram Sodimm 8GB+8GB DDR4 2400MHz SK hynix Compatibile laptop",
+            "Kingston Fury Beast DDR4 16GB (2x8GB) 3600MHz",   # desktop kit
             "6x SK Hynix 8GB DDR4 RAM Laptop Arbeitsspeicher",
             "48GB DDR4 Laptop ram So-dimm – Samsung & SK Hynix – 6x 8GB – 2400/2666 MHz",
             "crucial 64gb ram (2x32gb) ddr4 2666mhz so-dimm",
