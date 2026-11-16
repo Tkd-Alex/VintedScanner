@@ -23,6 +23,7 @@ import alert_parser
 import availability
 import hardware_enricher
 import message_format as fmt
+import parts_hunt
 import run_report as report_module
 import storage
 
@@ -32,6 +33,7 @@ PENDING_ALERTS_PATH = PROJECT_DIR / "vinted_pending_alerts.json"
 MINI_PC_LABEL = storage.MODE_LABELS["mini_pc"]
 RAM_HUNT_LABEL = storage.MODE_LABELS["ram"]
 CPU_HUNT_LABEL = storage.MODE_LABELS["cpu"]
+PARTS_HUNT_LABEL = storage.MODE_LABELS["parts"]
 # Records searches, matches and problems of the current run; reset by main().
 run_report = report_module.RunReport()
 # SQLite store and the id of the current run; opened by main().
@@ -126,6 +128,19 @@ RAM_HUNT_DEFAULT_QUERIES = [
     {"page": "1", "per_page": "24", "search_text": "notebook 32gb ddr4", "order": "newest_first", "filters": {}, "price_to": "100"},
     {"page": "1", "per_page": "24", "search_text": "portatile 16gb ddr4 guasto", "order": "newest_first", "filters": {}, "price_to": "100"},
 ]
+# Added to RAM Hunt when ram_hunt_ssd_donors and ram_hunt_add_ssd_queries are on.
+RAM_HUNT_SSD_QUERIES = [
+    {"page": "1", "per_page": "24", "search_text": "portatile ssd 1tb", "order": "newest_first", "filters": {}},
+    {"page": "1", "per_page": "24", "search_text": "notebook ssd 1tb", "order": "newest_first", "filters": {}},
+    {"page": "1", "per_page": "24", "search_text": "portatile guasto ssd", "order": "newest_first", "filters": {}},
+]
+
+# Parts Hunt: loose DDR4 SO-DIMMs and SSDs, see parts_hunt.py.
+PARTS_HUNT_RAM_CATALOG_ID = "3603"   # Elettronica > ... > Unità RAM
+PARTS_HUNT_SSD_CATALOG_ID = "3607"   # ... > Dispositivi di archiviazione interna
+# Every Vinted condition except 7 ("Non del tutto funzionante").
+PARTS_HUNT_CONDITION_IDS = ["6", "1", "2", "3", "4"]
+PARTS_HUNT_DEFAULT_PER_PAGE = "48"
 
 LAPTOP_RE = re.compile(
     r"\b(portatile|notebook|laptop|computer portatile|thinkpad|latitude|elitebook|"
@@ -990,6 +1005,19 @@ def load_ram_hunt_configuration():
         raise ValueError("ram_hunt_queries must be a list of search dictionaries")
     if not configured:
         return [], max_price
+    if bool(getattr(Config, "ram_hunt_ssd_donors", True)) and bool(
+        getattr(Config, "ram_hunt_add_ssd_queries", True)
+    ):
+        # Additive, like the mini-PC discovery searches: an existing Config.py
+        # with its own ram_hunt_queries also searches for SSD donor laptops.
+        known = {
+            str(query.get("search_text", "")).casefold()
+            for query in configured if isinstance(query, dict)
+        }
+        configured = configured + [
+            dict(query, filters={}) for query in RAM_HUNT_SSD_QUERIES
+            if query["search_text"].casefold() not in known
+        ]
 
     result = []
     for configured_query in configured:
@@ -1034,12 +1062,15 @@ def parse_item_price_amount(item):
         return None
 
 
-def classify_ram_hunt_candidate(item, max_price_eur=RAM_HUNT_DEFAULT_MAX_PRICE_EUR):
-    """Classify an under-budget laptop listing as a RAM recovery candidate.
+def classify_ram_hunt_candidate(item, max_price_eur=RAM_HUNT_DEFAULT_MAX_PRICE_EUR, ssd_donors=None):
+    """Classify an under-budget laptop listing as a RAM (or SSD) donor candidate.
 
     Returns a small, human-readable classification or None for unrelated items.
     Listing claims are not proof that modules are removable or functional.
+    ``ssd_donors`` defaults to the ``ram_hunt_ssd_donors`` setting (on).
     """
+    if ssd_donors is None:
+        ssd_donors = bool(getattr(Config, "ram_hunt_ssd_donors", True))
     if not isinstance(item, dict):
         return None
     price = parse_item_price_amount(item)
@@ -1072,6 +1103,47 @@ def classify_ram_hunt_candidate(item, max_price_eur=RAM_HUNT_DEFAULT_MAX_PRICE_E
         has_16 = bool(RAM_16_RE.search(text))
         has_small_only = bool(RAM_8_OR_LESS_RE.search(text)) and not has_16 and not has_32
 
+    ram_tier = _ram_donor_tier(damaged, has_ddr4, has_ddr3, has_32, has_16, has_small_only)
+    ssd = donor_ssd_claim(text, price) if ssd_donors else None
+    if ram_tier and ssd:
+        ram_tier["ssd_claim"] = ssd
+    if ram_tier or not ssd:
+        return ram_tier
+    # No useful RAM, but a big SSD: a laptop within budget is a cheap SSD donor
+    # (DDR3 or 8 GB laptops included, since only the drive is wanted).
+    return {
+        "tier": f"SSD DONOR — {ssd} stated",
+        "reason": "Laptop within budget that states a large SSD; it can be moved to the mini PC.",
+        "ram_claim": f"{ram_gb} GB stated" if ram_gb else "RAM size/type not specified",
+        "ssd_claim": ssd,
+        "confidence": "medium for the stated SSD; type and health not verified",
+    }
+
+
+def donor_ssd_claim(text, price):
+    """Return the useful SSD a donor laptop states ("1 TB SSD"), or None.
+
+    Useful means 1 TB or more, or a 500/512 GB NVMe when the whole laptop costs
+    no more than the Parts Hunt cap for a loose 500 GB NVMe drive.
+    """
+    nvme_500_cap = parts_hunt.merge_caps(getattr(Config, "parts_hunt_caps", None))["nvme_500"]
+    for drive in hardware_enricher._find_storage(text):
+        capacity, unit, kind = (drive.split(" ", 2) + ["", ""])[:3]
+        if not re.search(r"SSD|NVME|M\.2", kind) or "SSHD" in kind:
+            continue
+        try:
+            gigabytes = float(capacity) * (1000 if unit == "TB" else 1)
+        except ValueError:
+            continue
+        if gigabytes >= 900:
+            return drive
+        if 450 <= gigabytes <= 530 and "NVME" in kind and price <= nvme_500_cap:
+            return drive
+    return None
+
+
+def _ram_donor_tier(damaged, has_ddr4, has_ddr3, has_32, has_16, has_small_only):
+    """The original RAM Hunt tiers, unchanged; None when no RAM tier applies."""
     # Avoid alerts for listings explicitly identified as DDR3: it does not meet
     # the desired DDR4 recovery target. Unknown generation stays a verification item.
     if has_ddr3 and not has_ddr4:
@@ -1116,17 +1188,26 @@ def classify_ram_hunt_candidate(item, max_price_eur=RAM_HUNT_DEFAULT_MAX_PRICE_E
 
 def ram_hunt_telegram_lines(candidate, max_price_eur, matched_query=None):
     """Build Telegram HTML lines for a RAM Hunt candidate; the first is the headline."""
+    ssd = candidate.get("ssd_claim")
+    donor_rows = [f"RAM in listing: <b>{fmt.esc(candidate['ram_claim'])}</b>"]
+    if ssd:
+        donor_rows.append(f"SSD in listing: <b>{fmt.esc(ssd)}</b>")
+    checklist = [
+        "• removable DDR4 SO-DIMM",
+        "• number and size of the modules",
+    ]
+    if ssd:
+        checklist.append("• SSD type (M.2 NVMe 2280/2230 or 2.5\" SATA, not M.2 SATA or soldered) and health")
     return [
         f"🧩 <b>RAM HUNT</b> · {fmt.esc(candidate['tier'])}",
         *fmt.section("🧩 Possible donor laptop", [
-            f"RAM in listing: <b>{fmt.esc(candidate['ram_claim'])}</b>",
+            *donor_rows,
             f"Why: {fmt.esc(candidate['reason'])}",
             f"Confidence: {fmt.esc(candidate['confidence'])}",
             f"Price cap: {fmt.euro(max_price_eur)} (excl. shipping/fees)",
         ]),
         *fmt.expandable("🔎 Before buying", [
-            "• removable DDR4 SO-DIMM",
-            "• number and size of the modules",
+            *checklist,
             "• working condition and exact model",
             "• total cost with shipping/fees",
             fmt.italic("The listing text does not prove the RAM is present or working."),
@@ -1422,6 +1503,149 @@ def process_cpu_hunt_queries(
     return processing_failed
 
 
+def _price_text(amount):
+    """Format a Decimal as a Vinted price_to value: 88, 209.5."""
+    text = format(amount.quantize(Decimal("0.01")), "f")
+    return text.rstrip("0").rstrip(".") if "." in text else text
+
+
+def default_parts_hunt_queries(caps, margin):
+    """Built-in Parts Hunt searches: the RAM and internal-storage categories."""
+    ram_limit = max(caps[key] for key in parts_hunt.RAM_CAP_KEYS) * (1 + margin)
+    ssd_limit = max(caps[key] for key in parts_hunt.SSD_CAP_KEYS) * (1 + margin)
+    conditions = list(PARTS_HUNT_CONDITION_IDS)
+
+    def query(catalog_id, limit, search_text=None):
+        filters = {"status": conditions}
+        if catalog_id:
+            filters["catalog"] = [catalog_id]
+        entry = {
+            "page": "1", "per_page": PARTS_HUNT_DEFAULT_PER_PAGE, "order": "newest_first",
+            "filters": filters, "price_to": _price_text(limit),
+        }
+        if search_text:
+            entry["search_text"] = search_text
+        return entry
+
+    return [
+        query(PARTS_HUNT_RAM_CATALOG_ID, ram_limit),
+        query(PARTS_HUNT_RAM_CATALOG_ID, ram_limit, "ddr4"),
+        query(PARTS_HUNT_SSD_CATALOG_ID, ssd_limit),
+        query(PARTS_HUNT_SSD_CATALOG_ID, ssd_limit, "ssd"),
+        # Parts filed in the wrong category.
+        query(None, ram_limit, "sodimm ddr4"),
+    ]
+
+
+def load_parts_hunt_configuration():
+    """Return (query parameters, caps, discount margin) for the Parts Hunt.
+
+    Enabled by default; ``parts_hunt_enabled = False`` turns it off.
+    """
+    caps = parts_hunt.merge_caps(getattr(Config, "parts_hunt_caps", None))
+    try:
+        margin = Decimal(str(getattr(
+            Config, "parts_hunt_discount_margin", parts_hunt.DEFAULT_DISCOUNT_MARGIN
+        )))
+    except InvalidOperation as error:
+        raise ValueError("parts_hunt_discount_margin must be a number such as 0.10") from error
+    if not Decimal("0") <= margin <= Decimal("0.5"):
+        raise ValueError("parts_hunt_discount_margin must be between 0 and 0.5")
+    if not bool(getattr(Config, "parts_hunt_enabled", True)):
+        return [], caps, margin
+
+    configured = getattr(Config, "parts_hunt_queries", None)
+    if configured is None:
+        configured = default_parts_hunt_queries(caps, margin)
+    if not isinstance(configured, list):
+        raise ValueError("parts_hunt_queries must be a list of search dictionaries")
+    overall_limit = max(caps.values()) * (1 + margin)
+    queries = []
+    for configured_query in configured:
+        if not isinstance(configured_query, dict):
+            raise ValueError("each parts_hunt_queries entry must be a dictionary")
+        query = {
+            "page": "1", "per_page": PARTS_HUNT_DEFAULT_PER_PAGE, "order": "newest_first",
+            "filters": {}, "price_to": _price_text(overall_limit),
+        }
+        query.update(configured_query)
+        queries.append(build_catalog_params(query))
+    return queries, caps, margin
+
+
+def parts_hunt_telegram_lines(candidate):
+    """Build Telegram HTML lines for a Parts Hunt candidate; the first is the headline."""
+    price, cap = candidate["price"], candidate["cap"]
+    if candidate["band"] == "target":
+        verdict = f"✅ within the {fmt.euro(cap)} target"
+    else:
+        verdict = f"💬 {candidate['over_pct']}% over the {fmt.euro(cap)} target: ask for a discount"
+    rows = [
+        f"Part: <b>{fmt.esc(candidate['part'])}</b>",
+        f"Price: {fmt.euro(price)} · {verdict}",
+    ]
+    if candidate.get("eur_per_gb") is not None:
+        rows.append(f"Per GB: €{candidate['eur_per_gb']:.3f} (excl. shipping/fees)")
+    rows.extend(f"⚠️ {fmt.esc(note)}" for note in candidate["notes"])
+    return [
+        f"🛒 <b>PARTS HUNT</b> · {fmt.esc(parts_hunt.headline_tier(candidate))}",
+        *fmt.section("🛒 Part for the OptiPlex 7090 Micro", rows),
+        *fmt.expandable("🔎 Before buying", [
+            *parts_hunt.checklist(candidate),
+            "• total cost with shipping/fees",
+            fmt.italic("Read from the title only; the listing does not prove the part works."),
+        ]),
+    ]
+
+
+def process_parts_hunt_queries(
+    session, catalog_url, queries, api_headers, seen_ids, dry_run, caps, margin,
+):
+    """Run Parts Hunt queries with their own seen IDs and classification.
+
+    A wanted part priced above its cap + margin is skipped without being stored,
+    so the next run still sees it if the seller lowers the price.
+    """
+    processing_failed = False
+    fetch_details = bool(getattr(Config, "parts_hunt_fetch_details", False))
+
+    def classify(raw):
+        candidate, _ = parts_hunt.analyze(
+            str(raw.get("title") or ""), parse_item_price_amount(raw), caps, margin,
+            description=str(raw.get("description") or ""),
+        )
+        return candidate
+
+    for params in queries:
+        matched_query = params.get("search_text") or PARTS_HUNT_LABEL
+        items = fetch_query_items(
+            PARTS_HUNT_LABEL, matched_query, session, catalog_url, params, api_headers
+        )
+        if items is None:
+            processing_failed = True
+            continue
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            _, over_cap = parts_hunt.analyze(
+                str(item.get("title") or ""), parse_item_price_amount(item), caps, margin
+            )
+            if over_cap:
+                logging.debug("%s over cap, not stored: %r", PARTS_HUNT_LABEL, item.get("title"))
+                continue
+            if not run_item_safely(PARTS_HUNT_LABEL, item, lambda item=item: process_hunt_item(
+                item, seen_ids, dry_run,
+                label=PARTS_HUNT_LABEL,
+                classify=classify,
+                build_lines=parts_hunt_telegram_lines,
+                fetch_details=fetch_details,
+                matched_query=matched_query,
+                session=session,
+            )):
+                processing_failed = True
+    return processing_failed
+
+
 def load_availability_configuration():
     """Return (checks per run, recheck hours, max age days); 0 checks means disabled."""
     if not getattr(Config, "availability_check_enabled", True):
@@ -1649,11 +1873,12 @@ def save_run_outcome(dry_run=False):
 
 
 def run_scan(dry_run=False):
-    """Run mini-PC searches and, independently, the optional RAM/CPU Hunt searches."""
+    """Run mini-PC searches and, independently, the optional RAM/CPU/Parts Hunt searches."""
     try:
         catalog_url, queries, api_headers = load_configuration(dry_run)
         ram_hunt_queries, ram_hunt_max_price = load_ram_hunt_configuration()
         cpu_hunt_queries, cpu_hunt_targets = load_cpu_hunt_configuration()
+        parts_queries, parts_caps, parts_margin = load_parts_hunt_configuration()
         seen_ids = load_seen_ids()
     except (AttributeError, OSError, ValueError, InvalidOperation, sqlite3.Error) as error:
         message = f"Configuration or local database error: {error}"
@@ -1684,6 +1909,8 @@ def run_scan(dry_run=False):
         run_report.mode(RAM_HUNT_LABEL)
     if cpu_hunt_queries:
         run_report.mode(CPU_HUNT_LABEL)
+    if parts_queries:
+        run_report.mode(PARTS_HUNT_LABEL)
 
     try:
         # Keep the original mini-PC search behavior and dedupe database intact.
@@ -1702,6 +1929,12 @@ def run_scan(dry_run=False):
                 seen_ids["cpu"], dry_run, cpu_hunt_targets,
             )
             query_failed = query_failed or cpu_hunt_failed
+        if parts_queries:
+            parts_failed = process_parts_hunt_queries(
+                session, catalog_url, parts_queries, api_headers,
+                seen_ids["parts"], dry_run, parts_caps, parts_margin,
+            )
+            query_failed = query_failed or parts_failed
         # Availability problems are reported but never fail the run.
         process_availability_checks(session, dry_run)
     except (OSError, sqlite3.Error) as error:

@@ -13,7 +13,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
-MODE_LABELS = {"mini_pc": "Mini PC (Proxmox)", "ram": "RAM Hunt", "cpu": "CPU Hunt"}
+MODE_LABELS = {
+    "mini_pc": "Mini PC (Proxmox)", "ram": "RAM Hunt", "cpu": "CPU Hunt", "parts": "Parts Hunt",
+}
 MODE_BY_LABEL = {label: mode for mode, label in MODE_LABELS.items()}
 
 # Statuses that keep a listing out of later runs. "failed" (undelivered alert)

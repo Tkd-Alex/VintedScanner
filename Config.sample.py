@@ -136,6 +136,34 @@ ram_hunt_queries = [
         "order": "newest_first", "filters": {}, "price_to": "100",
     },
 ]
+# RAM Hunt also flags laptops within the price cap that state a 1 TB+ SSD (or a
+# 500 GB NVMe when the laptop costs no more than parts_hunt_caps["nvme_500"]).
+ram_hunt_ssd_donors = True
+# Also search "portatile ssd 1tb", "notebook ssd 1tb" and "portatile guasto ssd",
+# in addition to ram_hunt_queries.
+ram_hunt_add_ssd_queries = True
+
+# Independent Parts Hunt mode: loose DDR4 SO-DIMM modules and SSDs for a
+# Dell OptiPlex 7090 Micro, judged from the listing title and price. Caps are on
+# the item price (buyer fee and shipping excluded); a listing up to
+# parts_hunt_discount_margin above its cap is also alerted, as "ask for a discount".
+# Listings above that are skipped without being stored, so a later price drop
+# is still noticed. Built-in searches use the RAM (3603) and internal storage
+# (3607) categories unless parts_hunt_queries is set.
+parts_hunt_enabled = True
+parts_hunt_caps = {
+    "ram_8": 30,       # one 8 GB DDR4 SO-DIMM
+    "ram_16": 50,      # one 16 GB DDR4 SO-DIMM
+    "ram_2x16": 80,    # 2x16 GB kit (or 32 GB in total)
+    "nvme_500": 40,    # 500/512 GB M.2 NVMe, only when really cheap
+    "nvme_1tb": 110,   # 1 TB M.2 NVMe (2280, or 2230)
+    "nvme_2tb": 190,
+    "sata_1tb": 85,    # 1 TB 2.5" SATA
+    "sata_2tb": 150,
+}
+parts_hunt_discount_margin = 0.10
+parts_hunt_fetch_details = False
+# parts_hunt_queries = [...]  # optional; same format as ram_hunt_queries
 
 # Independent CPU Hunt mode: looks for loose low-power CPUs that can upgrade a
 # cheap i3/Pentium mini PC. Keys are CPU identifiers from hardware_enricher.py;

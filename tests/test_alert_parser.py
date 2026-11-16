@@ -156,6 +156,37 @@ class HuntAlertTests(unittest.TestCase):
         self.assertEqual((data["cores"], data["threads"], data["generation"]), (6, 6, 8))
         self.assertEqual(data["build_estimate_eur"], float(candidate["build_estimate"]))
 
+    def test_ram_hunt_ssd_donor_alert(self):
+        title = "Portatile HP 15 8GB RAM SSD 1TB"
+        candidate = scanner.classify_ram_hunt_candidate({"title": title, "price": {"amount": "90"}}, 100)
+        headline, *lines = scanner.ram_hunt_telegram_lines(candidate, 100, "portatile ssd 1tb")
+        item = dict(self.item, title=title, price="90 EUR")
+        data = alert_parser.parse_alert(plain_alert(item, headline, lines, "portatile ssd 1tb"))
+        self.assertEqual(data["mode"], "ram")
+        self.assertEqual(data["tier"], "SSD DONOR — 1 TB SSD stated")
+        self.assertEqual((data["ram_gb"], data["storage"]), (8, "1 TB SSD"))
+
+    def parts_alert(self, title, price):
+        candidate, _ = scanner.parts_hunt.analyze(
+            title, Decimal(price), scanner.parts_hunt.merge_caps(None)
+        )
+        headline, *lines = scanner.parts_hunt_telegram_lines(candidate)
+        item = dict(self.item, title=title, price=f"{price} EUR")
+        return candidate, alert_parser.parse_alert(plain_alert(item, headline, lines, "ddr4"))
+
+    def test_parts_hunt_ram_alert(self):
+        candidate, data = self.parts_alert("Mémoire ram 32gb (16*2) 2400 pc4 SODIMM ddr4", "86")
+        self.assertEqual(data["mode"], "parts")
+        self.assertEqual(data["tier"], "ASK DISCOUNT — DDR4 SO-DIMM 32 GB (2×16 GB)")
+        self.assertEqual((data["price_eur"], data["ram_gb"]), (86.0, 32))
+        self.assertIsNone(data.get("storage"))
+
+    def test_parts_hunt_ssd_alert(self):
+        candidate, data = self.parts_alert("SSD Western Digital WD Blue SN550 500GB M.2 NVMe", "35")
+        self.assertEqual(data["tier"], "TARGET — NVMe M.2 SSD 500 GB")
+        self.assertEqual(data["storage"], "NVMe M.2 SSD 500 GB")
+        self.assertIsNone(data.get("ram_gb"))
+
 
 class RunSummaryTests(unittest.TestCase):
     def report(self):

@@ -17,6 +17,7 @@ from storage import MODE_BY_LABEL
 MINI_PC_HEADLINE_RE = re.compile(r"^\S+\s+(\d+)/100 · (.+?)(?: · ⬆️ (\d+)/100 after upgrade)?$")
 RAM_HEADLINE_RE = re.compile(r"^🧩 RAM HUNT · (.+)$")
 CPU_HEADLINE_RE = re.compile(r"^🔧 CPU HUNT · (.+?) · €[\d.,]+$")
+PARTS_HEADLINE_RE = re.compile(r"^🛒 PARTS HUNT · (.+)$")
 EURO_RE = re.compile(r"€\s?(\d[\d,]*(?:\.\d+)?)")
 CORES_RE = re.compile(r"(\d+) core / (\d+) thread")
 GB_RE = re.compile(r"(\d+) GB")
@@ -56,7 +57,7 @@ def _int(pattern: re.Pattern, text: str, group: int = 1) -> int | None:
 
 
 def parse_alert(text: str) -> dict[str, Any] | None:
-    """Parse a mini-PC, RAM Hunt or CPU Hunt alert; None for anything else."""
+    """Parse a mini-PC, RAM, CPU or Parts Hunt alert; None for anything else."""
     blocks = _blocks(text)
     if not blocks or len(blocks[0]) < 2:
         return None
@@ -65,6 +66,8 @@ def parse_alert(text: str) -> dict[str, Any] | None:
     data: dict[str, Any] = {}
     if match := RAM_HEADLINE_RE.match(headline):
         data.update(mode="ram", tier=match.group(1))
+    elif match := PARTS_HEADLINE_RE.match(headline):
+        data.update(mode="parts", tier=match.group(1))
     elif match := CPU_HEADLINE_RE.match(headline):
         data.update(mode="cpu", cpu=match.group(1))
     elif match := MINI_PC_HEADLINE_RE.match(headline):
@@ -111,6 +114,13 @@ def _read_row(row: str, data: dict[str, Any]) -> None:
         data["ram_gb"] = _int(GB_RE, parts[0])
     elif label == "Disk" and not value.startswith("❓"):
         data["storage"] = value
+    elif label == "SSD in listing":
+        data["storage"] = value
+    elif label == "Part":
+        if "SO-DIMM" in value:
+            data["ram_gb"] = _int(GB_RE, value)
+        else:
+            data["storage"] = value
     elif label == "GPU":
         data["gpu"] = value
     elif label == "Base":
