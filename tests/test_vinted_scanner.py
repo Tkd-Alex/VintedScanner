@@ -523,6 +523,8 @@ class MainTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             database_path = Path(directory) / "test.db"
             with patch.object(scanner.Config, "ram_hunt_enabled", False), patch.object(
+                scanner.Config, "parts_hunt_enabled", False, create=True
+            ), patch.object(
                 scanner, "DATABASE_PATH", database_path
             ), patch.object(scanner, "LEGACY_LEDGER_PATHS", {}), patch.object(
                 scanner, "LEGACY_FILTERED_PATH", Path(directory) / "filtered.txt"
@@ -538,6 +540,95 @@ class MainTests(unittest.TestCase):
         self.assertEqual(run["status"], "ok")
         self.assertIn("Vinted scan finished", run["summary"])
         self.assertIsNone(scanner.store)
+
+
+class PartsHuntTests(TempStoreMixin, unittest.TestCase):
+    def setUp(self):
+        super().setUp()
+        self.report = scanner.report_module.RunReport(clock=lambda: 0.0)
+        patcher = patch.object(scanner, "run_report", self.report)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        scanner._catalog_state["paused"] = False
+        self.caps = scanner.parts_hunt.merge_caps(None)
+        self.margin = scanner.Decimal("0.10")
+
+    @staticmethod
+    def item(item_id, title, price):
+        return {
+            "id": item_id, "title": title, "url": f"https://www.vinted.it/items/{item_id}",
+            "price": {"amount": price, "currency_code": "EUR"},
+        }
+
+    def test_default_queries_search_categories_with_condition_filter_and_cap(self):
+        with patch.object(scanner.Config, "parts_hunt_enabled", True, create=True):
+            queries, caps, margin = scanner.load_parts_hunt_configuration()
+        self.assertEqual(len(queries), 5)
+        self.assertEqual(queries[0]["attribute_ids[catalog]"], "3603")
+        self.assertEqual(queries[0]["attribute_ids[status]"], "6,1,2,3,4")
+        self.assertEqual(queries[0]["price_to"], "88")
+        self.assertEqual(queries[2]["attribute_ids[catalog]"], "3607")
+        self.assertEqual(queries[2]["price_to"], "209")
+        self.assertEqual(queries[4]["search_text"], "sodimm ddr4")
+        self.assertNotIn("attribute_ids[catalog]", queries[4])
+        self.assertEqual((caps["ram_16"], margin), (50, scanner.Decimal("0.1")))
+
+    def test_configuration_overrides_and_validation(self):
+        with patch.object(scanner.Config, "parts_hunt_caps", {"ram_16": 45}, create=True), patch.object(
+            scanner.Config, "parts_hunt_discount_margin", 0, create=True
+        ), patch.object(scanner.Config, "parts_hunt_queries", [{"search_text": "ddr4 16gb"}], create=True):
+            queries, caps, margin = scanner.load_parts_hunt_configuration()
+        self.assertEqual((caps["ram_16"], caps["ram_8"], margin), (45, 30, 0))
+        self.assertEqual(queries[0]["search_text"], "ddr4 16gb")
+        self.assertEqual(queries[0]["price_to"], "190")
+        with patch.object(scanner.Config, "parts_hunt_caps", {"ram_64": 10}, create=True):
+            with self.assertRaises(ValueError):
+                scanner.load_parts_hunt_configuration()
+        with patch.object(scanner.Config, "parts_hunt_discount_margin", 2, create=True):
+            with self.assertRaises(ValueError):
+                scanner.load_parts_hunt_configuration()
+        with patch.object(scanner.Config, "parts_hunt_enabled", False, create=True):
+            self.assertEqual(scanner.load_parts_hunt_configuration()[0], [])
+
+    @patch("vinted_scanner.send_notifications", return_value=True)
+    @patch("vinted_scanner.get_catalog_items")
+    def test_alerts_targets_skips_over_cap_and_stores_non_candidates(self, get_items, send):
+        get_items.return_value = [
+            self.item(1, "16Gb 1x16GB Samsung Sodimm DDR4 2666MHz", "50.00"),
+            self.item(2, "Ram Ddr4 Sodimm SkHynix 16gb 2666mhz", "60.00"),
+            self.item(3, "Crucial X6 2Tb SSD Portátil", "100.00"),
+            self.item(4, "SSD NVMe 1TB Crucial p3", "120.00"),
+        ]
+        seen = set()
+        failed = scanner.process_parts_hunt_queries(
+            None, "url", [{"search_text": "x"}], {}, seen, False, self.caps, self.margin,
+        )
+        self.assertFalse(failed)
+        self.assertEqual(seen, {"1", "3", "4"})
+        self.assertIsNone(self.listing(2, "parts"))  # over cap: retried next run
+        self.assertEqual(self.status(3, "parts"), "ignored")
+        first = self.listing(1, "parts")
+        self.assertEqual((first["status"], first["ram_gb"]), ("notified", 16))
+        self.assertEqual(first["tier"], "TARGET — DDR4 SO-DIMM 16 GB (1×16 GB)")
+        discount = self.listing(4, "parts")
+        self.assertEqual(discount["tier"], "ASK DISCOUNT — NVMe M.2 SSD 1 TB")
+        self.assertEqual(discount["storage"], "NVMe M.2 SSD 1 TB")
+        self.assertEqual(send.call_count, 2)
+        lines = send.call_args.kwargs["extra_lines"]
+        self.assertTrue(any("10% over the €110 target" in line for line in lines))
+        self.assertIsNone(self.listing(1, "ram"))
+
+    @patch("vinted_scanner.send_notifications")
+    @patch("vinted_scanner.get_catalog_items")
+    def test_dry_run_records_without_sending(self, get_items, send):
+        get_items.return_value = [self.item(5, "Pny ssd Sata III 1 TB", "85")]
+        seen = set()
+        with patch("builtins.print"):
+            scanner.process_parts_hunt_queries(
+                None, "url", [{"search_text": "x"}], {}, seen, True, self.caps, self.margin,
+            )
+        send.assert_not_called()
+        self.assertEqual(self.status(5, "parts"), "dry_run")
 
 
 if __name__ == "__main__":
@@ -623,7 +714,9 @@ class RamHuntTests(TempStoreMixin, unittest.TestCase):
     def test_ram_hunt_loads_default_queries_with_price_cap(self):
         with patch.object(scanner.Config, "ram_hunt_enabled", True), patch.object(
             scanner.Config, "ram_hunt_max_price_eur", 100
-        ), patch.object(scanner.Config, "ram_hunt_queries", scanner.RAM_HUNT_DEFAULT_QUERIES):
+        ), patch.object(scanner.Config, "ram_hunt_queries", scanner.RAM_HUNT_DEFAULT_QUERIES), patch.object(
+            scanner.Config, "ram_hunt_add_ssd_queries", False, create=True
+        ):
             queries, cap = scanner.load_ram_hunt_configuration()
         self.assertEqual(len(queries), 7)
         self.assertEqual(cap, 100)
@@ -713,6 +806,65 @@ class RamHuntTests(TempStoreMixin, unittest.TestCase):
             "price": {"amount": "60", "currency_code": "EUR"},
         }
         self.assertIn("16 GB DDR4", scanner.classify_ram_hunt_candidate(broken, 100)["tier"])
+
+
+    def test_ram_hunt_adds_ssd_donor_searches_without_duplicates(self):
+        own = [dict(scanner.RAM_HUNT_DEFAULT_QUERIES[0]), {
+            "page": "1", "per_page": "24", "search_text": "Portatile SSD 1TB",
+            "order": "newest_first", "filters": {},
+        }]
+        with patch.object(scanner.Config, "ram_hunt_enabled", True), patch.object(
+            scanner.Config, "ram_hunt_queries", own
+        ), patch.object(scanner.Config, "ram_hunt_add_ssd_queries", True, create=True):
+            queries, cap = scanner.load_ram_hunt_configuration()
+        texts = [query["search_text"] for query in queries]
+        self.assertEqual(texts, [
+            "portatile guasto", "Portatile SSD 1TB", "notebook ssd 1tb", "portatile guasto ssd",
+        ])
+        self.assertTrue(all(query["price_to"] == "100" for query in queries))
+        with patch.object(scanner.Config, "ram_hunt_queries", own), patch.object(
+            scanner.Config, "ram_hunt_ssd_donors", False, create=True
+        ):
+            self.assertEqual(len(scanner.load_ram_hunt_configuration()[0]), 2)
+
+    def test_ram_hunt_flags_laptop_with_large_ssd_as_ssd_donor(self):
+        small_ram_big_ssd = {
+            "id": 12, "title": "Portatile HP 15 8GB RAM SSD 1TB",
+            "price": {"amount": "90", "currency_code": "EUR"},
+        }
+        candidate = scanner.classify_ram_hunt_candidate(small_ram_big_ssd, 100)
+        self.assertEqual(candidate["tier"], "SSD DONOR — 1 TB SSD stated")
+        self.assertEqual(candidate["ram_claim"], "8 GB stated")
+        ddr3_nvme = {
+            "id": 13, "title": "Notebook Lenovo DDR3 guasto nvme 1tb",
+            "price": {"amount": "50", "currency_code": "EUR"},
+        }
+        self.assertTrue(scanner.classify_ram_hunt_candidate(ddr3_nvme, 100)["tier"].startswith("SSD DONOR"))
+        self.assertIsNone(scanner.classify_ram_hunt_candidate(small_ram_big_ssd, 100, ssd_donors=False))
+
+    def test_ram_hunt_ssd_donor_needs_a_large_or_very_cheap_drive(self):
+        def item(title, price):
+            return {"id": 14, "title": title, "price": {"amount": price, "currency_code": "EUR"}}
+        self.assertIsNone(scanner.classify_ram_hunt_candidate(item("Portatile Acer 8GB SSD 256GB", "40"), 100))
+        self.assertIsNone(scanner.classify_ram_hunt_candidate(item("Portatile Acer 8GB SSD 512GB", "40"), 100))
+        self.assertIsNone(scanner.classify_ram_hunt_candidate(item("Portatile Acer 8GB 1TB HDD", "40"), 100))
+        self.assertIsNone(scanner.classify_ram_hunt_candidate(item("Portatile Acer 8GB nvme 512GB", "45"), 100))
+        cheap = scanner.classify_ram_hunt_candidate(item("Portatile Acer 8GB nvme 512GB", "40"), 100)
+        self.assertEqual(cheap["ssd_claim"], "512 GB NVME")
+
+    def test_ram_hunt_keeps_ram_tier_and_adds_ssd_row(self):
+        item = {
+            "id": 15, "title": "Portatile HP guasto 16GB RAM DDR4 1TB SSD",
+            "price": {"amount": "60", "currency_code": "EUR"},
+        }
+        candidate = scanner.classify_ram_hunt_candidate(item, 100)
+        self.assertEqual(candidate["tier"], "MEDIUM — 16 GB DDR4 stated")
+        lines = scanner.ram_hunt_telegram_lines(candidate, 100)
+        self.assertTrue(any("SSD in listing: <b>1 TB SSD</b>" in line for line in lines))
+        without_ssd = scanner.ram_hunt_telegram_lines(
+            scanner.classify_ram_hunt_candidate(dict(item, title="Portatile HP guasto 16GB RAM DDR4"), 100), 100
+        )
+        self.assertFalse(any("SSD" in line for line in without_ssd))
 
 
 class CpuHuntTests(TempStoreMixin, unittest.TestCase):

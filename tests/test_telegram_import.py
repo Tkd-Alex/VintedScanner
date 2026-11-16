@@ -95,6 +95,40 @@ class MixedLayoutImportTests(unittest.TestCase):
         self.assertEqual(first, second)
 
 
+PARTS_ALERT = (
+    "🛒 PARTS HUNT · TARGET — DDR4 SO-DIMM 16 GB (1×16 GB)\n"
+    "16Gb 1x16GB Samsung Sodimm DDR4 2666MHz\n"
+    "💶 €50  ·  🔗 Open listing  ·  📷 Photo\n"
+    "🔍 ddr4\n\n"
+    "🛒 Part for the OptiPlex 7090 Micro\n"
+    "Part: DDR4 SO-DIMM 16 GB (1×16 GB)\n"
+    "Price: €50 · ✅ within the €50 target\n"
+    "Per GB: €3.125 (excl. shipping/fees)"
+)
+
+
+class PartsHuntImportTests(unittest.TestCase):
+    def test_parts_hunt_alert_is_imported_in_its_own_mode(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        export_path = Path(directory.name) / "result.json"
+        db_path = Path(directory.name) / "test.db"
+        links = [{"type": "text_link", "text": "Open listing", "href": "https://www.vinted.it/items/30000000001-ram"}]
+        export_path.write_text(json.dumps({"messages": [message(PARTS_ALERT, 1793736100, links)]},
+                                          ensure_ascii=False), encoding="utf-8")
+        output = io.StringIO()
+        with redirect_stdout(output):
+            self.assertEqual(telegram_import.main([str(export_path), "--db", str(db_path)]), 0)
+        self.assertIn("Parts Hunt: 1 alerts", output.getvalue())
+        store = storage.Store(db_path)
+        try:
+            row = dict(store.db.execute("SELECT * FROM listings").fetchone())
+        finally:
+            store.close()
+        self.assertEqual((row["mode"], row["item_id"], row["ram_gb"], row["price_eur"]),
+                         ("parts", "30000000001", 16, 50.0))
+        self.assertEqual(row["tier"], "TARGET — DDR4 SO-DIMM 16 GB (1×16 GB)")
+
 class ImportTests(unittest.TestCase):
     def setUp(self):
         directory = tempfile.TemporaryDirectory()

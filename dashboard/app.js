@@ -2,7 +2,7 @@
 
 /* Node Market: a read-only view of vinted_scanner.db served by dashboard.py. */
 
-const MODES = { mini_pc: "Mini PC", ram: "RAM", cpu: "CPU" };
+const MODES = { mini_pc: "Mini PC", ram: "RAM", cpu: "CPU", parts: "Parts" };
 const PAGE_SIZE = 48;
 const VERDICT_CLASS = {
   "Strong candidate": "strong",
@@ -11,7 +11,10 @@ const VERDICT_CLASS = {
   "Weak as configured; upgrade to be verified": "upgrade",
   "Weak for a Proxmox node": "weak",
 };
-const TIER_CLASS = { HIGH: "strong", MEDIUM: "worth", "TO VERIFY": "upgrade" };
+const TIER_CLASS = {
+  HIGH: "strong", MEDIUM: "worth", "TO VERIFY": "upgrade", "SSD DONOR": "worth",
+  TARGET: "strong", "ASK DISCOUNT": "upgrade",
+};
 const STATUS_LABEL = {
   notified: "Alert sent", dry_run: "Dry run", failed: "Not delivered",
   filtered: "Filtered out", ignored: "Not a candidate", legacy: "Imported ID",
@@ -29,16 +32,19 @@ const STATUS_FILTER = {
   mini_pc: [["alerts", "Alerts sent"], ["all", "Everything seen"], ["filtered", "Filtered out"], ["failed", "Not delivered"]],
   ram: [["alerts", "Alerts sent"], ["all", "Everything seen"], ["ignored", "Not a candidate"], ["failed", "Not delivered"]],
   cpu: [["alerts", "Alerts sent"], ["all", "Everything seen"], ["ignored", "Not a candidate"], ["failed", "Not delivered"]],
+  parts: [["alerts", "Alerts sent"], ["all", "Everything seen"], ["ignored", "Not a candidate"], ["failed", "Not delivered"]],
 };
 const FACET_FILTERS = {
   mini_pc: [["platform", "Platform"], ["generation", "Generation"], ["verdict", "Verdict"]],
   ram: [["tier", "Tier"]],
   cpu: [["cpu", "CPU"]],
+  parts: [["tier", "Part"]],
 };
 const SORTS = {
   mini_pc: [["newest", "Newest first"], ["perf_value", "Most CPU per euro"], ["fastest", "Fastest CPU"], ["value", "Best score per euro"], ["score", "Highest score"], ["price", "Price: low to high"], ["price_desc", "Price: high to low"]],
   ram: [["newest", "Newest first"], ["price", "Price: low to high"], ["price_desc", "Price: high to low"]],
   cpu: [["newest", "Newest first"], ["price", "Price: low to high"], ["price_desc", "Price: high to low"]],
+  parts: [["newest", "Newest first"], ["price", "Price: low to high"], ["price_desc", "Price: high to low"]],
 };
 // Hardware filters for mini PCs; min_mt options are built from the first reference CPU.
 const HARDWARE_FILTERS = [
@@ -136,14 +142,14 @@ async function render() {
 
 /* -- shared pieces ---------------------------------------------------------- */
 function markClass(item) {
-  if (item.mode === "ram") return TIER_CLASS[(item.tier || "").split(" — ")[0]] || "";
+  if (item.mode === "ram" || item.mode === "parts") return TIER_CLASS[(item.tier || "").split(" — ")[0]] || "";
   return VERDICT_CLASS[item.verdict] || "";
 }
 
 function badge(item) {
   let text;
   if (item.mode === "mini_pc") text = item.score == null ? null : `${item.score}/100`;
-  else if (item.mode === "ram") text = (item.tier || "").split(" — ")[0] || null;
+  else if (item.mode === "ram" || item.mode === "parts") text = (item.tier || "").split(" — ")[0] || null;
   else text = item.cores ? `${item.cores} cores · ${item.generation}th gen` : null;
   if (!text) return "";
   const mark = item.mode === "cpu" ? "" : `<i class="mark mark--${markClass(item)}"></i>`;
@@ -154,6 +160,7 @@ function buildLine(item) {
   if (item.mode === "mini_pc" && item.total_32_eur != null) return `With 32 GB: ${euro(item.total_32_eur)}`;
   if (item.mode === "cpu" && item.build_estimate_eur != null) return `Build: ${euro(item.build_estimate_eur)}`;
   if (item.mode === "ram" && item.ram_gb) return `${item.ram_gb} GB stated`;
+  if (item.mode === "parts") return (item.tier || "").split(" — ")[1] || "";
   return "";
 }
 
