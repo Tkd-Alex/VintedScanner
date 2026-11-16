@@ -33,6 +33,8 @@ def seed(store):
         )
     store.record_listing("mini_pc", "4", "filtered", filter_version="2", title="GEEKOM", price_eur=300.0)
     store.record_listing("ram", "5", "notified", title="ThinkPad", price_eur=60.0, tier="HIGH — 32 GB stated")
+    store.record_listing("parts", "6", "notified", title="Sodimm DDR4 16GB", price_eur=50.0,
+                         ram_gb=16, tier="TARGET — DDR4 SO-DIMM 16 GB")
 
 
 class QueryTests(unittest.TestCase):
@@ -50,6 +52,7 @@ class QueryTests(unittest.TestCase):
         self.assertEqual(data["modes"]["mini_pc"]["alerts"], 3)
         self.assertEqual(data["modes"]["mini_pc"]["filtered"], 1)
         self.assertEqual(data["modes"]["ram"]["alerts"], 1)
+        self.assertEqual(data["modes"]["parts"]["alerts"], 1)
         self.assertEqual(data["runs"]["problems"], 1)
         market = data["market"]
         self.assertEqual((market["count"], market["median_price"]), (3, 120.0))
@@ -67,6 +70,7 @@ class QueryTests(unittest.TestCase):
         self.assertEqual(ids({"q": "EliteDesk"}), ["2"])
         self.assertEqual(ids({"status": "filtered"}), ["4"])
         self.assertEqual(ids({"mode": "ram"}), ["5"])
+        self.assertEqual(ids({"mode": "parts"}), ["6"])
         self.assertEqual(ids({"generation": "x", "min_price": "abc"}), ["3", "2", "1"])
 
     def test_availability_filter_stats_and_timing(self):
