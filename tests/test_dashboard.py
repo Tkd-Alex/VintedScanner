@@ -61,6 +61,26 @@ class QueryTests(unittest.TestCase):
         self.assertEqual(market["top_score"][0]["item_id"], "2")
         self.assertEqual(market["cheapest_32"][0]["item_id"], "3")
 
+    def test_parts_price_stats(self):
+        self.assertEqual(dashboard.part_capacity("TARGET — DDR4 SO-DIMM 32 GB (2×16 GB)"), ("ram", 32.0))
+        self.assertEqual(dashboard.part_capacity("ASK DISCOUNT — NVMe M.2 SSD 1 TB"), ("nvme", 1000.0))
+        self.assertEqual(dashboard.part_capacity("TARGET — SATA 2.5″ SSD 2 TB"), ("sata", 2000.0))
+        self.assertIsNone(dashboard.part_capacity("HIGH — 32 GB stated"))
+        now = dashboard.datetime(2026, 11, 18, tzinfo=dashboard.timezone.utc)
+        listings = [
+            {"tier": "TARGET — DDR4 SO-DIMM 16 GB", "price_eur": 48.0, "seen_at": "2026-11-10T10:00:00Z"},
+            {"tier": "TARGET — DDR4 SO-DIMM 8 GB", "price_eur": 24.0, "seen_at": "2026-11-12T10:00:00Z"},
+            {"tier": "TARGET — DDR4 SO-DIMM 8 GB", "price_eur": 80.0, "seen_at": "2026-09-01T10:00:00Z"},  # old
+            {"tier": "TARGET — NVMe M.2 SSD 1 TB", "price_eur": 60.0, "seen_at": "2026-09-01T10:00:00Z"},
+            {"tier": "TARGET — SATA 2.5″ SSD 2 TB", "price_eur": 100.0, "seen_at": "2026-09-02T10:00:00Z"},
+        ]
+        stats = dashboard.parts_price_stats(listings, now=now)
+        self.assertEqual(stats["ram"], {"count": 2, "window_days": 30, "median_eur_per_gb": 3.0, "min_eur_per_gb": 3.0})
+        self.assertEqual((stats["ssd"]["count"], stats["ssd"]["window_days"]), (2, None))  # all-time fallback
+        self.assertEqual(stats["ssd"]["median_eur_per_gb"], 0.055)
+        self.assertEqual(stats["nvme"]["median_eur_per_gb"], 0.06)
+        self.assertEqual(dashboard.overview(self.db)["parts_prices"]["ram"]["median_eur_per_gb"], 3.125)
+
     def test_listings_filter_and_sort(self):
         ids = lambda params: [i["item_id"] for i in dashboard.listings(self.db, params)["items"]]  # noqa: E731
         self.assertEqual(ids({}), ["3", "2", "1"])

@@ -426,6 +426,9 @@ The dashboard is a read-only page served with Python's standard library (no
 extra dependencies). It has five sections:
 
 - **Overview**: how many mini PCs were alerted and what a 32 GB node costs;
+  a second banner with the median **price per GB of RAM and SSD** from the
+  Parts Hunt alerts of the last 30 days (all time if none; deal prices only,
+  since parts above cap + margin are never stored);
   a **value map** plotting CPU benchmark against the 16 GB build cost, with
   the best deals (no other listing is both cheaper and faster) and lines for
   the reference CPUs; the asking prices of each platform on a common scale (or

@@ -199,6 +199,33 @@ function runState(status) {
 }
 
 /* -- overview --------------------------------------------------------------- */
+const perGb = (value) => value == null ? "–"
+  : `€${value.toLocaleString("en-GB", { minimumFractionDigits: value < 1 ? 3 : 2, maximumFractionDigits: value < 1 ? 3 : 2 })}`;
+
+function partsBanner(prices) {
+  const ram = prices?.ram, ssd = prices?.ssd;
+  if (!ram?.count && !ssd?.count) return "";
+  const claims = [];
+  if (ram.count) claims.push(`1 GB of RAM costs about ${perGb(ram.median_eur_per_gb)}`);
+  if (ssd.count) claims.push(`1 GB of SSD about ${perGb(ssd.median_eur_per_gb)} (${euro(ssd.median_eur_per_gb * 1000)} per TB)`);
+  const basis = (stats, what) => !stats.count ? "" : `${what}: ${plural(stats.count, "alert")}` +
+    `${stats.window_days ? ` in the last ${stats.window_days} days` : " (all time)"}, cheapest ${perGb(stats.min_eur_per_gb)}/GB`;
+  const kinds = ["nvme", "sata"].filter((kind) => prices[kind]?.count)
+    .map((kind) => `${kind === "nvme" ? "NVMe" : "SATA"} ${perGb(prices[kind].median_eur_per_gb)}/GB`);
+  const detail = [basis(ram, "RAM"), basis(ssd, "SSD") + (kinds.length > 1 ? ` (${kinds.join(", ")})` : "")]
+    .filter(Boolean).join(". ");
+  return `
+    <section class="hero hero--parts">
+      <div>
+        <h1>${esc(`Today ${claims.join(", and ")}.`)}</h1>
+        <p>${esc(`Median price per GB of the Parts Hunt alerts. ${detail}. ` +
+          "Only parts within the target price (plus the discount margin) are stored, so these are deal prices, " +
+          "without shipping or buyer-protection fees.")}</p>
+      </div>
+      <a class="mode-link" href="#/parts"><span>See the parts</span><strong>→</strong></a>
+    </section>`;
+}
+
 async function renderOverview(params) {
   const [overview, list] = await Promise.all([
     api("overview"),
@@ -231,6 +258,7 @@ async function renderOverview(params) {
         }).join("")}
       </div>
     </section>
+    ${partsBanner(overview.parts_prices)}
     ${market.count ? `
     <section class="block">
       <div class="block__head">

@@ -22,9 +22,10 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import re
 import sqlite3
 import statistics
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -49,6 +50,11 @@ STATUS_GROUPS = {
 }
 ALERT_STATUSES = STATUS_GROUPS["alerts"]
 SEEN_AT = "COALESCE(notified_at, first_seen)"
+# Parts Hunt part labels in listings.tier ("TARGET — DDR4 SO-DIMM 16 GB (2×8 GB)",
+# "ASK DISCOUNT — NVMe M.2 SSD 1 TB"); see parts_hunt.classify_ram/classify_ssd.
+PART_RAM_RE = re.compile(r"DDR4 SO-DIMM (\d+) GB")
+PART_SSD_RE = re.compile(r"(NVMe|SATA)\S*(?: \S+)? SSD (\d+(?:\.\d+)?) (GB|TB)")
+PART_PRICE_WINDOW_DAYS = 30
 SORTS = {
     "newest": f"{SEEN_AT} DESC",
     "price": "price_eur IS NULL, price_eur ASC",
@@ -217,6 +223,11 @@ def overview(db: sqlite3.Connection) -> dict:
         "market": market_stats(market),
         "references": references(),
         "daily": [dict(row) for row in daily],
+        "parts_prices": parts_price_stats([dict(row) for row in db.execute(
+            f"SELECT tier, price_eur, {SEEN_AT} AS seen_at FROM listings"
+            f" WHERE mode = 'parts' AND status IN ({alerts})",
+            ALERT_STATUSES,
+        )]),
     }
 
 
@@ -272,6 +283,53 @@ def market_stats(listings: list[dict]) -> dict:
         "value_frontier": value_frontier(listings),
         "benchmarked": len(benchmarked),
     }
+
+
+def part_capacity(tier: str | None) -> tuple[str, float] | None:
+    """("ram" | "nvme" | "sata", capacity in GB) read from a Parts Hunt tier label."""
+    if not tier:
+        return None
+    if match := PART_RAM_RE.search(tier):
+        return "ram", float(match.group(1))
+    if match := PART_SSD_RE.search(tier):
+        size = float(match.group(2)) * (1000 if match.group(3) == "TB" else 1)
+        return match.group(1).lower(), size
+    return None
+
+
+def parts_price_stats(listings: list[dict], now: datetime | None = None) -> dict:
+    """Median euros per GB of RAM and SSD over the Parts Hunt alerts.
+
+    Uses the last PART_PRICE_WINDOW_DAYS days; a kind with no alert in that
+    window falls back to every alert (``window_days`` is then None). Only parts
+    priced within cap + discount margin are stored, so these are deal prices,
+    not the whole market.
+    """
+    now = now or datetime.now(timezone.utc)
+    cutoff = (now - timedelta(days=PART_PRICE_WINDOW_DAYS)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    samples: dict = {}
+    for listing in listings:
+        part = part_capacity(listing.get("tier"))
+        if part is None or not listing.get("price_eur") or not part[1]:
+            continue
+        kind, gb = part
+        sample = (listing["price_eur"] / gb, (listing.get("seen_at") or "") >= cutoff)
+        samples.setdefault(kind, []).append(sample)
+        if kind in ("nvme", "sata"):
+            samples.setdefault("ssd", []).append(sample)
+
+    def stats(kind):
+        values = samples.get(kind, [])
+        recent = [value for value, is_recent in values if is_recent]
+        chosen = recent or [value for value, _ in values]
+        return {
+            "count": len(chosen),
+            "window_days": PART_PRICE_WINDOW_DAYS if recent else None,
+            "median_eur_per_gb": round(statistics.median(chosen), 4) if chosen else None,
+            "min_eur_per_gb": round(min(chosen), 4) if chosen else None,
+        }
+
+    return {kind: stats(kind) for kind in ("ram", "ssd", "nvme", "sata")}
 
 
 def availability_stats(listings: list[dict]) -> dict:
